@@ -9,25 +9,25 @@ import (
 // errPosition 表示坐标与文本快照对不上。调用方丢弃整次结果，不猜测位置。
 var errPosition = errors.New("坐标超出文本范围")
 
-// position 是 LSP 的 UTF-16 行列坐标。
-type position struct {
+// Position 是 LSP 的 UTF-16 行列坐标，行和列都从 0 开始。
+type Position struct {
 	Line      int `json:"line"`
 	Character int `json:"character"`
 }
 
 type lspRange struct {
-	Start position `json:"start"`
-	End   position `json:"end"`
+	Start Position `json:"start"`
+	End   Position `json:"end"`
 }
 
 // toPosition 把 UTF-8 字节偏移换算为 UTF-16 行列。编辑器的文本只用 \n 换行。
-func toPosition(text string, offset int) (position, error) {
+func toPosition(text string, offset int) (Position, error) {
 	if offset < 0 || offset > len(text) || (offset < len(text) && !utf8.RuneStart(text[offset])) {
-		return position{}, errPosition
+		return Position{}, errPosition
 	}
 	before := text[:offset]
 	lineStart := strings.LastIndexByte(before, '\n') + 1
-	p := position{Line: strings.Count(before, "\n")}
+	p := Position{Line: strings.Count(before, "\n")}
 	for _, r := range before[lineStart:] {
 		p.Character += utf16Len(r)
 	}
@@ -35,7 +35,7 @@ func toPosition(text string, offset int) (position, error) {
 }
 
 // toOffset 把 UTF-16 行列换算为字节偏移。落在代理对中间或超出行尾都视为错误。
-func toOffset(text string, p position) (int, error) {
+func toOffset(text string, p Position) (int, error) {
 	if p.Line < 0 || p.Character < 0 {
 		return 0, errPosition
 	}

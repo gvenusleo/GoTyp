@@ -1,4 +1,4 @@
-// Package tinymist 通过 LSP 向 tinymist 请求 Typst 补全和悬停文档。
+// Package tinymist 通过 LSP 向 tinymist 同步 Typst 文本，请求补全、悬停和预览，并接收诊断。
 // 它不依赖 GUI，所有方法都可以在后台 goroutine 中调用。
 package tinymist
 
@@ -46,13 +46,18 @@ type Client struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	root   string
-	launch func(ctx context.Context, root string) (*conn, error)
+	launch func(ctx context.Context, root, outDir string) (*conn, error)
+	onDiag func(path string, diags []Diagnostic)
+	onShow func(path string, at Position)
 
 	mu       sync.Mutex
 	conn     *conn
 	starts   int
 	disabled bool
 	docs     map[string]*docState
+	// outDir 是 tinymist 导出文件的临时目录，第一次启动进程时创建，Close 时删除。
+	outDir   string
+	exportMu sync.Mutex
 }
 
 // New 返回仓库 root 的客户端，不启动进程。ctx 结束时进程随之结束。
@@ -63,7 +68,7 @@ func New(ctx context.Context, root string) *Client {
 
 // launch 启动 tinymist 并完成初始化握手。tinymist 在标准输入关闭时退出，
 // 所以 GoTyp 崩溃时不会留下进程。
-func launch(ctx context.Context, root string) (*conn, error) {
+func launch(ctx context.Context, root, outDir string) (*conn, error) {
 	if _, err := exec.LookPath("tinymist"); err != nil {
 		return nil, ErrUnavailable
 	}
@@ -85,14 +90,14 @@ func launch(ctx context.Context, root string) (*conn, error) {
 		<-c.done
 		cmd.Wait()
 	}()
-	if err := initialize(ctx, c, root); err != nil {
+	if err := initialize(ctx, c, root, outDir); err != nil {
 		stdin.Close()
 		return nil, err
 	}
 	return c, nil
 }
 
-func initialize(ctx context.Context, c *conn, root string) error {
+func initialize(ctx context.Context, c *conn, root, outDir string) error {
 	ctx, cancel := context.WithTimeout(ctx, initTimeout)
 	defer cancel()
 	uri := fileURI(root)
@@ -106,11 +111,17 @@ func initialize(ctx context.Context, c *conn, root string) error {
 				"completion": map[string]any{"completionItem": map[string]any{
 					"snippetSupport": true, "documentationFormat": []string{"markdown", "plaintext"},
 				}},
-				"hover": map[string]any{"contentFormat": []string{"markdown", "plaintext"}},
+				"hover":      map[string]any{"contentFormat": []string{"markdown", "plaintext"}},
+				"formatting": map[string]any{"dynamicRegistration": true},
 			},
+			"window": map[string]any{"showDocument": map[string]any{"support": true}},
 		},
-		// GoTyp 不向仓库写入文件，tinymist 也不能导出 PDF。语义高亮由 GoTyp 自己的分词器负责。
-		"initializationOptions": map[string]any{"exportPdf": "never", "semanticTokens": "disable"},
+		// GoTyp 不向仓库写入文件：tinymist 不自动导出，手动导出的产物写进临时目录。
+		// 语义高亮由 GoTyp 自己的分词器负责；格式化用 tinymist 内置的 typstyle。
+		"initializationOptions": map[string]any{
+			"exportPdf": "never", "outputPath": filepath.Join(outDir, "$name"),
+			"semanticTokens": "disable", "formatterMode": "typstyle",
+		},
 	}
 	if err := c.call(ctx, "initialize", params, nil); err != nil {
 		return err
@@ -131,35 +142,54 @@ func (cl *Client) connect() (*conn, error) {
 		cl.disabled = true
 		return nil, ErrUnavailable
 	}
+	if cl.outDir == "" {
+		dir, err := makeTemp("tinymist")
+		if err != nil {
+			return nil, err
+		}
+		cl.outDir = dir
+	}
 	cl.starts++
-	c, err := cl.launch(cl.ctx, cl.root)
+	c, err := cl.launch(cl.ctx, cl.root, cl.outDir)
 	if err != nil {
 		if errors.Is(err, ErrUnavailable) {
 			cl.disabled = true
 		}
 		return nil, err
 	}
+	// 诊断在 didOpen 之后才会到达，这时接收者已经就位。
+	c.handleNotes(cl.notification)
 	cl.conn = c
 	return c, nil
 }
 
-// request 先把文档同步到 doc 的版本，再在同一把锁内发出请求，
-// 保证服务端按这个版本的文本计算结果。
+// request 请求 doc 在 offset 处的结果。
 func (cl *Client) request(ctx context.Context, doc Document, method string, offset int, out any) error {
-	pos, err := toPosition(doc.Text, offset)
+	params, err := positionParams(doc, offset)
 	if err != nil {
 		return err
 	}
+	return cl.syncCall(ctx, doc, method, params, out)
+}
+
+// positionParams 是指向 doc 中 offset 的 TextDocumentPositionParams。
+func positionParams(doc Document, offset int) (map[string]any, error) {
+	pos, err := toPosition(doc.Text, offset)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"textDocument": map[string]any{"uri": fileURI(doc.Path)}, "position": pos}, nil
+}
+
+// syncCall 先把文档同步到 doc 的版本，再在同一把锁内发出请求，保证服务端按这个版本的文本计算结果。
+func (cl *Client) syncCall(ctx context.Context, doc Document, method string, params, out any) error {
 	cl.mu.Lock()
 	c, err := cl.syncLocked(doc)
 	if err != nil {
 		cl.mu.Unlock()
 		return err
 	}
-	id, ch, err := c.send(method, map[string]any{
-		"textDocument": map[string]any{"uri": fileURI(doc.Path)},
-		"position":     pos,
-	})
+	id, ch, err := c.send(method, params)
 	cl.mu.Unlock()
 	if err != nil {
 		return err
@@ -167,7 +197,7 @@ func (cl *Client) request(ctx context.Context, doc Document, method string, offs
 	return c.wait(ctx, id, ch, out)
 }
 
-// Open 同步文档，必要时启动进程。打开笔记时提前调用，让首次编译尽早开始。
+// Open 同步文档，必要时启动进程。打开笔记时和编辑停顿后调用，让诊断和预览跟上最新文本。
 func (cl *Client) Open(doc Document) error {
 	cl.mu.Lock()
 	defer cl.mu.Unlock()
@@ -189,6 +219,9 @@ func (cl *Client) syncLocked(doc Document) (*conn, error) {
 		err = c.notify("textDocument/didOpen", map[string]any{"textDocument": map[string]any{
 			"uri": uri, "languageId": "typst", "version": st.lspVersion, "text": doc.Text,
 		}})
+		if err == nil {
+			err = focus(c, doc.Path)
+		}
 	case doc.Version < st.version:
 		return nil, errStale
 	case st.version != doc.Version:
@@ -206,6 +239,23 @@ func (cl *Client) syncLocked(doc Document) (*conn, error) {
 	return c, nil
 }
 
+// focus 把主实例的主文件切到 path。tinymist 只在第一次 didOpen 时自动跟随，之后切换的笔记
+// 不显式切换就收不到诊断。只发出请求，不等待结果，避免在持锁时阻塞。
+func focus(c *conn, path string) error {
+	id, ch, err := c.send("workspace/executeCommand", map[string]any{
+		"command": "tinymist.focusMain", "arguments": []any{path},
+	})
+	if err != nil {
+		return err
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), initTimeout)
+		defer cancel()
+		c.wait(ctx, id, ch, nil)
+	}()
+	return nil
+}
+
 // CloseDoc 通知服务端不再编辑 path。进程未启动或已退出时什么也不做。
 func (cl *Client) CloseDoc(path string) {
 	cl.mu.Lock()
@@ -221,11 +271,15 @@ func (cl *Client) CloseDoc(path string) {
 // Close 按 LSP 约定结束进程，超时后强制结束。之后的请求都返回 ErrUnavailable。
 func (cl *Client) Close() {
 	cl.mu.Lock()
-	c := cl.conn
+	c, dir := cl.conn, cl.outDir
 	cl.conn = nil
 	cl.disabled = true
 	cl.mu.Unlock()
 	defer cl.cancel()
+	if dir != "" {
+		// 进程结束后才删，避免删除时它还在写导出文件。
+		defer os.RemoveAll(dir)
+	}
 	if c == nil || c.closed() {
 		return
 	}

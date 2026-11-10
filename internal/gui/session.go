@@ -46,39 +46,29 @@ type session struct {
 	sourceVersion uint64
 	md            markdown.Options
 
-	previewList      ui.ListState
-	previewPages     []*ui.Bitmap
-	previewData      [][]byte // 每页 PNG 原始字节，见 pagetone.go
-	previewTone      pageTone // previewPages 的配色
-	recolorGen       uint64   // 新的页面或新的调色任务都会使进行中的调色过期
-	recolorTone      pageTone
-	recoloring       bool
-	previewPending   bool
-	previewEdit      time.Time
-	previewErr       string
-	previewMissing   bool // 预览失败的原因是找不到 typst 命令
-	previewErrOpen   bool
-	renderGeneration uint64
-	activeRender     uint64
-	renderCancel     context.CancelFunc
-	renderAttempted  bool
-	attemptedVersion uint64
-	exporting        bool
+	exporting bool
 
-	previewDur  time.Duration // 上次编译耗时
-	previewDiag string        // 上次成功编译的警告
+	// Typst 预览任务的状态，见 typstpreview.go。
+	syncedVersion   uint64    // 已交给 tinymist 的 buffer 版本
+	syncedText      string    // 该版本的文本，诊断的坐标按它换算
+	syncDue         time.Time // 编辑停顿后同步的时刻，零值表示还没安排
+	previewGen      uint64    // 启动或结束任务时加一，过期的启动结果据此丢弃
+	previewTask     string
+	previewURL      string
+	previewStop     chan struct{} // 关闭后不再等待任务所在进程退出
+	previewInvert   bool          // 任务启动时是否反转颜色
+	previewStarting bool
+	previewErr      string
+	previewMissing  bool // 预览失败的原因是 tinymist 不可用
+	previewErrOpen  bool
+	scrollLine      int       // 上次让预览滚到的光标行
+	scrollDue       time.Time // 光标停留后同步预览的时刻，零值表示没有待同步的移动
+	formatting      bool
 
 	statsCache   textStats
 	statsVersion uint64
 	statsReady   bool
 	selCache     selectionCache
-
-	// 常驻 typst watch 进程的状态，见 previewwatch.go。
-	watch        *watchHandle
-	sentVersion  uint64
-	watchWaiting bool
-	watchSent    time.Time
-	watchFails   int
 
 	// tinymist 补全与悬停的状态，见 complete.go。lspPath 为空表示未接入。
 	lspPath        string
@@ -303,6 +293,7 @@ func (a *App) confirmDiscard(s *session, quit bool) {
 }
 
 func (a *App) cancelTransition() {
+	a.pendingJump = nil
 	a.busy = false
 	a.closing = false
 	a.quitting = false

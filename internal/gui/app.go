@@ -39,10 +39,19 @@ type App struct {
 	tree        *vault.Tree
 	watchCancel context.CancelFunc
 	// lsp 是当前仓库的 tinymist 客户端，lspQueue 按顺序发送它的打开和关闭，见 complete.go。
-	lsp         *tinymist.Client
-	lspQueue    *serialQueue
-	scanRunning bool
-	scanAgain   bool
+	lsp      *tinymist.Client
+	lspQueue *serialQueue
+	// diags 是 tinymist 报告的诊断，按文件绝对路径存放，切换笔记时清空；diagReport 是排好的文本和计数。
+	diags      map[string][]tinymist.Diagnostic
+	diagReport diagReport
+	// preview 是 Typst 预览区的 WebView，创建失败时为空；previewSeq 为预览任务编号。
+	preview    *previewPage
+	previewSeq uint64
+	// pendingJump 是打开另一篇笔记后要移动到的位置，见 typstedit.go。
+	pendingJump  *noteJump
+	symbolRename symbolRenameState
+	scanRunning  bool
+	scanAgain    bool
 
 	outline     ui.OutlineState[string]
 	chosen      ui.Selection[string]
@@ -61,8 +70,6 @@ type App struct {
 
 	// focus 只在会话内生效，不写入工作区状态。
 	focus bool
-	// previewZoom 是 Typst 预览缩放，各笔记共用，不写入工作区状态。
-	previewZoom float32
 
 	// busy 表示正在切换、加载或改动文件，期间不能开始新的切换。
 	busy         bool
@@ -113,6 +120,8 @@ func Run() error {
 			Content:              ui.View(a.view),
 		})
 		a.win.OnClose(a.beforeClose)
+		// 预览 WebView 随窗口创建一次，切换笔记只换地址。创建失败时预览区显示错误，其余功能照常。
+		a.preview, _ = newPreviewPage(a.win)
 		if len(a.state.Recent) > 0 {
 			a.startOpenVault(a.state.Recent[0])
 		}
@@ -155,7 +164,7 @@ func (a *App) setMenu() {
 			mygo.Separator(),
 			{Role: mygo.RoleClose},
 		}},
-		{Role: mygo.RoleEditMenu},
+		a.editMenu(action),
 		{Label: "视图", Submenu: []*mygo.MenuItem{
 			{Label: "编辑", Type: mygo.MenuItemRadio, Accelerator: "CmdOrCtrl+1", Checked: a.mode == modeEdit, Click: chooseMode(modeEdit)},
 			{Label: "分屏", Type: mygo.MenuItemRadio, Accelerator: "CmdOrCtrl+2", Checked: a.mode == modeSplit, Click: chooseMode(modeSplit)},
@@ -165,14 +174,31 @@ func (a *App) setMenu() {
 			{Label: "显示行号", Type: mygo.MenuItemCheckbox, Checked: a.lineNumbers, Click: action(a.toggleLineNumbers)},
 			{Label: "专注模式", Type: mygo.MenuItemCheckbox, Accelerator: "CmdOrCtrl+Alt+F", Checked: a.focus, Click: action(a.toggleFocus)},
 			mygo.Separator(),
-			{Label: "放大预览", Accelerator: "CmdOrCtrl+=", Click: action(func() { a.stepPreviewZoom(1) })},
-			{Label: "缩小预览", Accelerator: "CmdOrCtrl+-", Click: action(func() { a.stepPreviewZoom(-1) })},
-			{Label: "恢复预览大小", Accelerator: "CmdOrCtrl+0", Click: action(a.resetPreviewZoom)},
-			mygo.Separator(),
 			{Role: mygo.RoleToggleFullScreen},
 		}},
 		{Role: mygo.RoleWindowMenu},
 	}))
+}
+
+// editMenu 是系统的编辑命令加上 Typst 编辑命令，后者只对可用 tinymist 的 Typst 笔记启用。
+func (a *App) editMenu(action func(func()) func(*mygo.MenuItem, *mygo.Window)) *mygo.MenuItem {
+	off := !a.typstReady()
+	return &mygo.MenuItem{Label: "编辑", Submenu: []*mygo.MenuItem{
+		{Role: mygo.RoleUndo},
+		{Role: mygo.RoleRedo},
+		mygo.Separator(),
+		{Role: mygo.RoleCut},
+		{Role: mygo.RoleCopy},
+		{Role: mygo.RolePaste},
+		{Role: mygo.RolePasteAndMatchStyle},
+		{Role: mygo.RoleDelete},
+		{Role: mygo.RoleSelectAll},
+		mygo.Separator(),
+		{Label: "跳转到定义", Accelerator: "F12", Disabled: off, Click: action(a.definitionAtCursor)},
+		{Label: "重命名符号…", Accelerator: "F2", Disabled: off, Click: action(a.startSymbolRename)},
+		{Label: "格式化文档", Accelerator: "Shift+Alt+F", Disabled: off, Click: action(a.formatCurrent)},
+		{Label: "跳到标题…", Accelerator: "CmdOrCtrl+Shift+O", Disabled: off, Click: action(a.openHeadings)},
+	}}
 }
 
 // refreshMenu 更新原生菜单的勾选状态。测试环境没有安装菜单，直接跳过。
@@ -190,7 +216,7 @@ func (a *App) setMode(mode int) {
 	a.modeChanged()
 }
 
-// modeChanged 切到编辑模式时保留常驻编译进程，切回预览时无需重新启动。
+// modeChanged 切到编辑模式时保留预览任务，切回预览时无需重新启动。
 func (a *App) modeChanged() {
 	a.persistWorkspace()
 	a.refreshMenu()

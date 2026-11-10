@@ -3,11 +3,13 @@ package gui
 import (
 	"path"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 
 	"github.com/egoist/mygo/ui"
 
+	"gotyp/internal/tinymist"
 	"gotyp/internal/vault"
 )
 
@@ -25,6 +27,12 @@ type paletteState struct {
 	results []string
 	forTree *vault.Tree
 	forText string
+	// headingMode 为真时面板列出当前笔记的标题，结果是 headings 的下标，见 typstedit.go。
+	// 用单独的标志而不是看 headings 是否为空：没有标题的笔记也要停留在标题模式。
+	headingMode     bool
+	headings        []tinymist.Heading
+	headingsFor     *session
+	headingsVersion uint64
 }
 
 // noPointer 是还没见过指针的位置：面板刚打开时指针可能正停在某一行上，不算它动过。
@@ -62,6 +70,11 @@ func (a *App) paletteResults() []string {
 		}
 		return unicode.ToLower(r)
 	}, p.query)
+	if p.headingMode {
+		p.results = headingResults(p.headings, query)
+		p.index, p.moved = 0, true
+		return p.results
+	}
 	type match struct {
 		id    string
 		score int
@@ -85,6 +98,17 @@ func (a *App) paletteResults() []string {
 	// 查询变化后回到最佳匹配。
 	p.index, p.moved = 0, true
 	return p.results
+}
+
+// headingResults 返回名字包含查询词的标题下标，保持文档中的顺序，方便按结构浏览。
+func headingResults(headings []tinymist.Heading, query string) []string {
+	results := []string{}
+	for i, h := range headings {
+		if query == "" || strings.Contains(strings.ToLower(h.Name), query) || subsequence(strings.ToLower(h.Name), query) {
+			results = append(results, strconv.Itoa(i))
+		}
+	}
+	return results
 }
 
 // matchScore 越小越靠前：0 文件名包含，1 路径或标题包含，2 按顺序包含全部字符。
@@ -138,7 +162,13 @@ func (a *App) paletteKey(k ui.TextKey) bool {
 func (a *App) choosePalette() {
 	results := a.paletteResults()
 	a.palette.open = false
-	if a.palette.index >= 0 && a.palette.index < len(results) {
-		a.openNote(results[a.palette.index])
+	if a.palette.index < 0 || a.palette.index >= len(results) {
+		return
 	}
+	if a.palette.headingMode {
+		i, _ := strconv.Atoi(results[a.palette.index])
+		a.chooseHeading(i)
+		return
+	}
+	a.openNote(results[a.palette.index])
 }

@@ -39,8 +39,16 @@ type conn struct {
 	mu      sync.Mutex
 	next    int64
 	pending map[int64]chan *message
+	onNote  func(method string, params json.RawMessage)
 
 	done chan struct{}
+}
+
+// handleNotes 设置服务端通知的接收者，在读取循环中调用。设置之前到达的通知被丢弃。
+func (c *conn) handleNotes(fn func(method string, params json.RawMessage)) {
+	c.mu.Lock()
+	c.onNote = fn
+	c.mu.Unlock()
 }
 
 func newConn(r io.Reader, w io.WriteCloser) *conn {
@@ -168,7 +176,12 @@ func (c *conn) dispatch(m *message) {
 	case m.Method != "" && len(m.ID) > 0:
 		c.answer(m)
 	case m.Method != "":
-		// 通知（如诊断）暂不使用。
+		c.mu.Lock()
+		fn := c.onNote
+		c.mu.Unlock()
+		if fn != nil {
+			fn(m.Method, m.Params)
+		}
 	default:
 		id, err := strconv.ParseInt(string(m.ID), 10, 64)
 		if err != nil {
@@ -184,10 +197,20 @@ func (c *conn) dispatch(m *message) {
 	}
 }
 
-// answer 回应服务端发来的请求。GoTyp 不提供任何客户端能力，一律返回空结果，避免服务端等待。
+// answer 回应服务端发来的请求。window/showDocument 交给接收者并回应成功，供预览跳回源码；
+// 其余能力 GoTyp 不提供，返回空结果，避免服务端等待。
 func (c *conn) answer(m *message) {
 	result := json.RawMessage("null")
-	if m.Method == "workspace/configuration" {
+	switch m.Method {
+	case "window/showDocument":
+		c.mu.Lock()
+		fn := c.onNote
+		c.mu.Unlock()
+		if fn != nil {
+			fn(m.Method, m.Params)
+		}
+		result = json.RawMessage(`{"success":true}`)
+	case "workspace/configuration":
 		var p struct {
 			Items []json.RawMessage `json:"items"`
 		}

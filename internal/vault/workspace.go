@@ -29,8 +29,6 @@ type Appearance struct {
 	Theme    string `json:"theme,omitempty"`
 	UIFont   string `json:"uiFont,omitempty"`
 	CodeFont string `json:"codeFont,omitempty"`
-	// PreviewPPI 是 Typst 预览的分辨率，零值表示默认。
-	PreviewPPI int `json:"previewPPI,omitempty"`
 	// RecolorPreview 表示深色主题下给 Typst 预览调色，默认不调色。
 	RecolorPreview bool `json:"recolorPreview,omitempty"`
 }

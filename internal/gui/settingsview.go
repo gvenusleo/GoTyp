@@ -96,13 +96,9 @@ func (a *App) appearanceView(c *ui.Context) {
 	a.fontPreview(c)
 }
 
-// previewSettingsView 画「预览」：Typst 预览的清晰度和深色主题下是否调色。
+// previewSettingsView 画「预览」：深色主题下是否给 Typst 预览调色。
 func (a *App) previewSettingsView(c *ui.Context) {
 	s := &a.settings
-	settingRow(c, "Typst 预览清晰度", func() {
-		ui.Select(c.Key("settings-clarity"), &s.clarity, clarityLabels()).Label("Typst 预览清晰度").
-			Width(comboWidth).FontSize(textSize).OnChange(a.choosePreview)
-	})
 	settingRow(c, "深色主题下给 Typst 预览调色", func() {
 		ui.Switch(c.Key("settings-recolor"), &s.recolor).Label("深色主题下给 Typst 预览调色").OnChange(a.choosePreview)
 	})

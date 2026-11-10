@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/egoist/mygo"
-	"github.com/egoist/mygo/ui"
 
 	"gotyp/internal/vault"
 )
@@ -162,17 +161,8 @@ func (a *App) renamed(from, to string) {
 	a.detachLSP(s)
 	s.id = to + strings.TrimPrefix(s.id, from)
 	s.updateLanguage()
+	s.resetPreview()
 	a.attachLSP(s)
-	s.previewList = ui.ListState{}
-	s.previewPages, s.previewData = nil, nil
-	s.recolorGen++
-	s.recoloring = false
-	s.previewErr, s.previewDiag = "", ""
-	s.previewMissing = false
-	s.previewErrOpen = false
-	s.previewDur = 0
-	s.renderAttempted = false
-	s.watchFails = 0
 	a.configurePreview(s)
 	a.previewChanged(s)
 	a.chosen.Clear()

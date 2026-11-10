@@ -1,7 +1,6 @@
 package gui
 
 import (
-	"image"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,36 +55,25 @@ func TestFinishSaveKeepsNewerEditDirty(t *testing.T) {
 	}
 }
 
-// 新编辑之后才返回的旧编译结果不能替换预览，也不能吞掉待编译的新版本。
-func TestFinishPreviewDropsStaleResult(t *testing.T) {
+// 启动期间切换了笔记，迟到的预览任务不能加载到新笔记上，进行中的新启动也不能被它结束。
+func TestFinishPreviewDropsStaleTask(t *testing.T) {
 	a := newApp()
+	a.lsp = tinymist.New(a.ctx, t.TempDir())
+	t.Cleanup(a.lsp.Close)
 	s := newSession("note.typ", "= Title", vault.FileStat{})
 	a.current = s
-	s.renderGeneration = 2
-	s.activeRender = 1
-	s.previewPending = true
-	a.finishPreview(s, previewResult{id: 1, version: 2, pages: []*ui.Bitmap{nil}})
-	if s.activeRender != 0 || s.renderAttempted || !s.previewPending || len(s.previewPages) != 0 {
-		t.Fatalf("stale result applied: %+v", s)
+	s.previewGen, s.previewStarting = 2, true
+	p := tinymist.Preview{ID: "gotyp-1", URL: "http://127.0.0.1:1/"}
+	if a.finishPreview(s, a.lsp, 1, p, nil) {
+		t.Fatal("过期的预览任务被加载")
 	}
-}
-
-// 调色期间换上了新的编译结果，基于旧页面的调色结果不能覆盖新页面。
-func TestFinishRecolorDropsStaleResult(t *testing.T) {
-	a := newApp()
-	s := newSession("note.typ", "= Title", vault.FileStat{})
-	a.current = s
-	s.setPreviewPages(previewResult{pages: []*ui.Bitmap{nil}, data: [][]byte{nil}, tone: pageTone{dark: true}})
-	a.recolorPreview(s)
-	if !s.recoloring {
-		t.Fatal("recolor did not start")
+	if s.previewURL != "" || s.previewTask != "" || !s.previewStarting {
+		t.Fatalf("过期结果改动了预览状态：%+v", s)
 	}
-	stale := s.recolorGen
-	fresh := ui.NewBitmap(image.NewNRGBA(image.Rect(0, 0, 1, 1)))
-	s.setPreviewPages(previewResult{pages: []*ui.Bitmap{fresh}, data: [][]byte{nil}})
-	a.finishRecolor(s, stale, pageTone{}, []*ui.Bitmap{nil}, nil)
-	if s.previewPages[0] != fresh {
-		t.Fatal("stale recolor replaced newer pages")
+	other := newSession("other.typ", "", vault.FileStat{})
+	a.current = other
+	if a.finishPreview(s, a.lsp, 2, p, nil) {
+		t.Fatal("已切走的笔记加载了预览")
 	}
 }
 
@@ -105,20 +93,6 @@ func TestSwitchingNotesKeepsEditorsApart(t *testing.T) {
 	tt.Frame()
 	if other.dirty() || other.ed.Buffer.String() != "same" || other.ed.Buffer.CanUndo() {
 		t.Fatalf("new session inherited edits: %q", other.ed.Buffer.String())
-	}
-}
-
-// 常驻编译进程返回的旧版本结果不能替换预览，也不能结束等待中的新版本。
-func TestFinishWatchDropsStaleResult(t *testing.T) {
-	a := newApp()
-	s := newSession("note.typ", "= Title", vault.FileStat{})
-	a.current = s
-	h := &watchHandle{}
-	s.watch, s.watchWaiting = h, true
-	s.ed.Buffer.Set("= Newer")
-	a.finishWatch(s, h, previewResult{version: s.ed.Buffer.Version() - 1, pages: []*ui.Bitmap{nil}})
-	if len(s.previewPages) != 0 || !s.watchWaiting || s.renderAttempted {
-		t.Fatalf("stale watch result applied: %+v", s)
 	}
 }
 
@@ -159,5 +133,27 @@ func TestFinishCompletionDropsStaleResult(t *testing.T) {
 	a.current = other
 	if a.finishCompletion(s, s.ed.Buffer.Version(), 4, 1, nil) {
 		t.Fatal("已切走的笔记显示了补全")
+	}
+}
+
+// 切换笔记清空诊断后，被引入文件报告的同一条错误必须重新显示，不能被当作重复丢掉；
+// 已显示的诊断再次到达时不重排。
+func TestDiagnosticsShownAgainAfterSwitch(t *testing.T) {
+	a := newApp()
+	client := tinymist.New(a.ctx, t.TempDir())
+	t.Cleanup(client.Close)
+	a.lsp = client
+	s := newSession("a.typ", "= A", vault.FileStat{})
+	s.lspPath = "/v/a.typ"
+	a.current = s
+	lib := []tinymist.Diagnostic{{Error: true, Message: "unclosed delimiter"}}
+	a.setDiagnostics(client, "/v/lib.typ", lib)
+	if a.diagReport.errors != 1 {
+		t.Fatalf("errors = %d，期望 1", a.diagReport.errors)
+	}
+	a.diags, a.diagReport = nil, diagReport{}
+	a.setDiagnostics(client, "/v/lib.typ", lib)
+	if a.diagReport.errors != 1 {
+		t.Fatalf("切换后 errors = %d，期望 1", a.diagReport.errors)
 	}
 }

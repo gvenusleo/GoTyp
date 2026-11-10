@@ -1,6 +1,8 @@
 package gui
 
 import (
+	"fmt"
+
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -17,7 +19,6 @@ const (
 	statusHeight      = 28
 	statusItemHeight  = 22
 	textWidth         = 720
-	pageWidth         = 800
 	previewInset      = 20
 	previewSideInset  = 28
 	emptyInset        = 24
@@ -51,7 +52,6 @@ const (
 
 	statusPositionWidth = 380
 	statusStatsWidth    = 460
-	statusPagesWidth    = 540
 
 	// barButton 是纯图标按钮的边长，侧栏开关、新建和「更多」等按钮一样大。
 	barButton      = 26
@@ -67,8 +67,7 @@ const (
 	modeShadowY    = 1
 	modeShadowBlur = 2
 
-	bannerOpacity      = 0.10
-	statusMutedOpacity = 0.8
+	bannerOpacity = 0.10
 )
 
 // 字号，单位为 DIP。正文沿用主题字号；文件树和列表略小，状态栏和诊断再小一号。
@@ -117,6 +116,11 @@ func (a *App) applyTheme(c *ui.Context) {
 		a.themes = themeCache{
 			base: base, appearance: ap, app: app, sidebar: sidebarTheme(*app),
 			code: code, md: md, preview: previewTheme(app, md),
+		}
+		// 预览页加载前露出的是 WebView 的底色，跟随主题避免切换笔记时闪白。只在主题变化时设置一次。
+		if a.preview != nil {
+			s := app.Surface
+			a.preview.web.SetBackgroundColor(fmt.Sprintf("#%02x%02x%02x", s.R, s.G, s.B))
 		}
 	}
 	c.SetTheme(a.themes.app)

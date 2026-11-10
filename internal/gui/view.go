@@ -20,6 +20,7 @@ func (a *App) view(c *ui.Context) {
 	}
 	a.paletteView(c)
 	a.renameView(c)
+	a.symbolRenameView(c)
 	a.settingsView(c)
 	if a.toast != "" {
 		c.Toast(a.toast)
@@ -42,12 +43,12 @@ func (a *App) handleShortcuts(c *ui.Context) {
 		a.openSettings()
 	case c.Shortcut(ui.Cmd|ui.Alt, ui.KeyF):
 		a.toggleFocus()
-	case c.Shortcut(ui.Cmd, ui.KeyEqual):
-		a.stepPreviewZoom(1)
-	case c.Shortcut(ui.Cmd, ui.KeyMinus):
-		a.stepPreviewZoom(-1)
-	case c.Shortcut(ui.Cmd, ui.Key0):
-		a.resetPreviewZoom()
+	case c.Shortcut(ui.Shift|ui.Alt, ui.KeyF):
+		a.formatCurrent()
+	case c.Shortcut(ui.Cmd|ui.Shift, ui.KeyO):
+		a.openHeadings()
+	case c.Shortcut(0, ui.KeyF2):
+		a.startSymbolRename()
 	case a.focus && c.Shortcut(0, ui.KeyEscape):
 		a.focus = false
 		a.refreshMenu()
