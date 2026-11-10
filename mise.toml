@@ -3,7 +3,7 @@ go = "1.27.3"
 
 [tasks.dev]
 description = "启动桌面应用（热重载）"
-run = "go tool mygo dev"
+run = "go tool mygo dev -background"
 
 [tasks.build]
 description = "编译安装包"
