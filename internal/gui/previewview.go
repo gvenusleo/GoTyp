@@ -67,7 +67,7 @@ func (a *App) diagnosticsView(c *ui.Context, s *session) {
 		AlignItems(ui.Start).Background(color.Alpha(bannerOpacity)).BorderWidth(0, 0, 1, 0).BorderColor(t.Border).
 		Transition(bannerMotion).Children(func() {
 		ui.Scroll(c).MaxHeight(diagnosticsHeight).Grow(1).MinWidth(0).Children(func() {
-			ui.Text(c, text).Font("monospace").FontSize(detailFontSize).TextColor(color).Selectable()
+			ui.Text(c, text).Font(codeFamily(a.state.Appearance.CodeFont)).FontSize(detailFontSize).TextColor(color).Selectable()
 		})
 		ghostButton(c, "复制", iconCopy).OnClick(func() {
 			a.services.WriteClipboard(text)

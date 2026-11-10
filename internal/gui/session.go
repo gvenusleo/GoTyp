@@ -117,6 +117,7 @@ func (s *session) dirty() bool {
 
 // applyEditorPrefs 应用与单篇笔记无关的编辑器偏好。
 func (a *App) applyEditorPrefs(s *session) {
+	s.ed.Font = ui.Font{Family: codeFamily(a.state.Appearance.CodeFont), Size: codeFontSize}
 	s.ed.LineNumbers = editor.LineNumbersOff
 	if a.lineNumbers {
 		s.ed.LineNumbers = editor.LineNumbersOn

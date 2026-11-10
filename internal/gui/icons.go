@@ -42,6 +42,12 @@ var (
 	iconCheck          = icon("check")
 	iconCircleX        = icon("circle-x")
 	iconWarning        = icon("triangle-alert")
+	iconSettings       = icon("settings")
+	iconPalette        = icon("palette")
+	iconSun            = icon("sun")
+	iconMoon           = icon("moon")
+	iconMonitor        = icon("monitor")
+	iconClose          = icon("x")
 )
 
 // fileIconExts 把小写扩展名对应到文件图标，没有列出的用 iconFile。只分几大类，

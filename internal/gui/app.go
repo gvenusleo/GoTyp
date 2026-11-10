@@ -72,9 +72,10 @@ type App struct {
 	generation uint64
 	menuReady  bool
 
-	palette paletteState
-	rename  renameState
-	themes  themeCache
+	palette  paletteState
+	rename   renameState
+	settings settingsState
+	themes   themeCache
 
 	toast string
 	err   string
@@ -95,6 +96,8 @@ func Run() error {
 		// 状态文件很小，在窗口出现前同步读取，避免启动时先闪一下空状态。
 		a.state, _ = vault.LoadState(a.statePath)
 	}
+	// 在 Run 之前设置，窗口一出现就是保存的外观。
+	mygo.Theme.SetSource(themeSource(a.state.Appearance.Theme))
 	mygo.App.OnBeforeQuit(a.beforeQuit)
 	mygo.App.OnQuit(a.cancel)
 	mygo.App.WhenReady(func() {
@@ -123,7 +126,19 @@ func (a *App) setMenu() {
 		return func(*mygo.MenuItem, *mygo.Window) { a.setMode(mode) }
 	}
 	mygo.App.SetMenu(mygo.NewMenu([]*mygo.MenuItem{
-		{Role: mygo.RoleAppMenu},
+		{Role: mygo.RoleAppMenu, Submenu: []*mygo.MenuItem{
+			{Role: mygo.RoleAbout},
+			mygo.Separator(),
+			{Label: "设置…", Accelerator: "CmdOrCtrl+,", Click: action(a.openSettings)},
+			mygo.Separator(),
+			{Role: mygo.RoleServices},
+			mygo.Separator(),
+			{Role: mygo.RoleHide},
+			{Role: mygo.RoleHideOthers},
+			{Role: mygo.RoleUnhide},
+			mygo.Separator(),
+			{Role: mygo.RoleQuit},
+		}},
 		{Label: "文件", Submenu: []*mygo.MenuItem{
 			{Label: "新建 Markdown 笔记", Accelerator: "CmdOrCtrl+N", Click: action(func() { a.newNote(vault.KindMarkdown) })},
 			{Label: "新建 Typst 笔记", Accelerator: "CmdOrCtrl+Shift+N", Click: action(func() { a.newNote(vault.KindTypst) })},
