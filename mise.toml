@@ -1,0 +1,48 @@
+[tools]
+go = "1.27.3"
+
+[tasks.dev]
+description = "启动桌面应用（热重载）"
+run = "go tool mygo dev"
+
+[tasks.build]
+description = "编译安装包"
+run = "go tool mygo build"
+
+[tasks.install]
+description = "安装 macOS App"
+depends = ["build"]
+run = "rm -rf /Applications/GoTyp.app && ditto build/darwin-arm64/GoTyp.app /Applications/GoTyp.app"
+
+[tasks.skills]
+description = "更新 Agent Skills"
+run = "npx skills update -p -y && go tool mygo install-skills"
+
+[tasks.fmt]
+description = "gofmt 格式化"
+run = "gofmt -w ."
+
+[tasks.fmt-check]
+description = "检查格式，不改写文件"
+run = "test -z \"$(gofmt -l .)\""
+
+[tasks.vet]
+description = "go vet 与 mygo vet 静态检查"
+run = "go vet ./... && go tool mygo vet ."
+
+[tasks.test]
+description = "运行测试"
+run = "go test ./... -count=1 -race"
+
+[tasks.test-nocgo]
+description = "验证无 cgo 构建与测试"
+env = { CGO_ENABLED = "0" }
+run = "go test ./... -count=1"
+
+[tasks.vuln]
+description = "govulncheck 漏洞扫描"
+run = "go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./..."
+
+[tasks.ci]
+description = "CI：fmt-check → vet → test → test-nocgo → build → vuln"
+depends = ["fmt-check", "vet", "test", "test-nocgo", "build", "vuln"]

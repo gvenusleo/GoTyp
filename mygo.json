@@ -1,0 +1,7 @@
+{
+  "name": "GoTyp",
+  "identifier": "xin.liuyu.gotyp",
+  "version": "0.0.1",
+  "main": "./cmd/gotyp",
+  "out": "build"
+}
