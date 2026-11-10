@@ -174,6 +174,15 @@ Native UI ── 应用状态与编辑会话
 
 `vault`、`typst`、`tinymist` 不依赖 GUI，`tinymist` 也不依赖 MyGo，转换为编辑器类型在 `internal/gui` 中完成。Markdown 和 Typst 保留两条预览分支，不抽象通用渲染接口。
 
+## 应用图标
+
+应用图标由 `cmd/icon` 用 Go 画出，`mise run icon` 重新生成 `resources/icon.png`（正式版）和 `resources/icon-dev.png`（开发版），不手工编辑 PNG。
+
+- 底板是 macOS 规格的连续圆角方块，颜色只带一点主题色，带软影、顶部柔光和内缘高光
+- 图形是三块共用左下角、往右上逐层放大的方块，像一沓错落的纸；外两层是自带圆角的 L 形，层间留出露底板的缝
+- 三层由外到内取主题色的浅、中、原色。正式版主题色是赭石 `#C0704A`；开发版换成青绿 `#1F8A80`，在程序坞里与正式版区分
+- 只使用标准库和已有依赖 `golang.org/x/image`
+
 ## 测试
 
 只测试防止数据损坏和异步竞争的部分：
