@@ -46,3 +46,7 @@ run = "go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./..."
 [tasks.ci]
 description = "CI：fmt-check → vet → test → test-nocgo → build → vuln"
 depends = ["fmt-check", "vet", "test", "test-nocgo", "build", "vuln"]
+
+[tasks.icon]
+description = "重新生成应用图标（resources/icon.png、icon-dev.png）"
+run = "go run ./cmd/icon"
