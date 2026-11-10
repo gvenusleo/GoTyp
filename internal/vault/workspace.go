@@ -24,8 +24,16 @@ type Workspace struct {
 	SidebarHidden   bool `json:"sidebarHidden,omitempty"`
 }
 
+// Appearance 是与仓库无关的外观设置。空串表示默认：主题跟随系统，字体用系统的。
+type Appearance struct {
+	Theme    string `json:"theme,omitempty"`
+	UIFont   string `json:"uiFont,omitempty"`
+	CodeFont string `json:"codeFont,omitempty"`
+}
+
 // State 是保存在用户配置目录中的应用状态。它可以随时删除，不影响任何笔记。
 type State struct {
+	Appearance Appearance           `json:"appearance,omitzero"`
 	Recent     []string             `json:"recent,omitempty"`
 	Workspaces map[string]Workspace `json:"workspaces,omitempty"`
 }
@@ -52,7 +60,7 @@ func (s *State) SetWorkspace(root string, w Workspace) {
 
 // Clone 返回可以交给后台写入的独立副本。
 func (s State) Clone() State {
-	out := State{Recent: slices.Clone(s.Recent), Workspaces: make(map[string]Workspace, len(s.Workspaces))}
+	out := State{Appearance: s.Appearance, Recent: slices.Clone(s.Recent), Workspaces: make(map[string]Workspace, len(s.Workspaces))}
 	for k, v := range s.Workspaces {
 		out.Workspaces[k] = v
 	}

@@ -13,15 +13,19 @@ func (a *App) sidebarView(c *ui.Context) {
 		t := c.Theme()
 		// 顶部留给红绿灯和浮在上方的侧栏开关（见 workspaceView），同时可以拖动窗口。
 		ui.Row(c).Height(headerHeight).Shrink(0).DragWindow()
+		// 仓库切换在最上面，表明下面的入口和文件树都属于这个仓库；左右边距与入口相同。
+		ui.Row(c).Shrink(0).Padding(0, t.Space(2), t.Space(1)).
+			Children(func() { a.vaultButton(c) })
 		ui.Column(c).Padding(0, t.Space(2), t.Space(1.5)).Gap(2).Children(func() {
 			sidebarEntry(c, iconPlus, "新建", "", true).Menu(a.newMenu)
 			sidebarEntry(c, iconSearch, "搜索", "⌘P", false).OnClick(a.openPalette)
 		})
 		a.treeView(c)
-		// 仓库切换放在侧栏底部，与笔记操作分开。它比状态栏高，加分隔线会与状态栏的顶边错开，
-		// 所以只靠留白隔开，左右边距与顶部入口相同。
-		ui.Row(c).Shrink(0).Padding(t.Space(1), t.Space(2), t.Space(2)).
-			Children(func() { a.vaultButton(c) })
+		// 设置按钮的图标与上面入口的图标中心对齐，离左边与离底边一样远。
+		inset := t.Space(3.5) + (entrySlot-barButton)/2
+		ui.Row(c).Shrink(0).Padding(0, inset, inset).Children(func() {
+			ghostButton(c.Key("settings"), "设置", iconSettings).OnClick(a.openSettings)
+		})
 	})
 }
 
@@ -47,8 +51,8 @@ func (a *App) vaultButton(c *ui.Context) {
 				ui.Icon(c, iconFolder).FontSize(iconSize).TextColor(t.TextMuted)
 			})
 			ui.Column(c).Gap(1).Grow(1).MinWidth(0).Children(func() {
-				// 仓库名是次要信息，不加粗、用次要文字色，不抢文件树的视线；路径再淡一档。
-				ui.Text(c, name).FontSize(textSize).TextColor(t.TextMuted).SingleLine().Ellipsis("…").MinWidth(0)
+				// 仓库名用正文色、不加粗，不抢文件树的视线；路径用次要文字色再淡一档。
+				ui.Text(c, name).FontSize(textSize).SingleLine().Ellipsis("…").MinWidth(0)
 				ui.Text(c, shortPath(filepath.Dir(root))).FontSize(captionSize).TextColor(t.TextMuted.Alpha(0.7)).
 					SingleLine().Ellipsis("…").MinWidth(0)
 			})

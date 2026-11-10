@@ -20,6 +20,7 @@ func (a *App) view(c *ui.Context) {
 	}
 	a.paletteView(c)
 	a.renameView(c)
+	a.settingsView(c)
 	if a.toast != "" {
 		c.Toast(a.toast)
 		a.toast = ""
@@ -37,6 +38,8 @@ func (a *App) handleShortcuts(c *ui.Context) {
 		a.setMode(modePreview)
 	case c.Shortcut(ui.Cmd, ui.KeyP):
 		a.openPalette()
+	case c.Shortcut(ui.Cmd, ui.KeyComma):
+		a.openSettings()
 	case c.Shortcut(ui.Cmd|ui.Alt, ui.KeyF):
 		a.toggleFocus()
 	case a.focus && c.Shortcut(0, ui.KeyEscape):

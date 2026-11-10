@@ -6,6 +6,8 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
 	"github.com/egoist/mygo/ui/markdown"
+
+	"gotyp/internal/vault"
 )
 
 // 布局尺寸集中在这里；view 中的相对间距继续使用主题的 Space。
@@ -38,6 +40,15 @@ const (
 	dialogWidth   = 360
 	hintWidth     = 200
 
+	// 设置面板的尺寸：settingsPad 是内容与面板边缘的留白，settingsGap 是各项之间的间距，
+	// comboWidth 放得下大多数字体名。
+	settingsWidth    = 600
+	settingsHeight   = 400
+	settingsNavWidth = 168
+	settingsPad      = 18
+	settingsGap      = 14
+	comboWidth       = 220
+
 	statusPositionWidth = 380
 	statusStatsWidth    = 460
 	statusPagesWidth    = 540
@@ -65,6 +76,7 @@ const (
 	textSize       = 13
 	detailFontSize = 12
 	captionSize    = 10 // 仓库路径这类最次要的附注
+	codeFontSize   = 13 // 编辑器与设置里的代码预览
 )
 
 var (
@@ -83,28 +95,33 @@ func toggleInset(c *ui.Context) float32 {
 	return 12
 }
 
-// themeCache 保存由系统主题派生的应用主题，系统外观或强调色不变时复用同一份。
+// themeCache 保存由系统主题和外观设置派生的应用主题，两者不变时复用同一份。
 // 编辑器和 Markdown 按指针判断主题是否变化，每帧换新指针会让它们每帧重算。
 type themeCache struct {
-	base    ui.Theme
-	app     *ui.Theme
-	sidebar *ui.Theme
-	code    *editor.Theme
-	md      *markdown.Theme
+	base       ui.Theme
+	appearance vault.Appearance
+	app        *ui.Theme
+	sidebar    *ui.Theme
+	code       *editor.Theme
+	md         *markdown.Theme
 }
 
-// applyTheme 在系统主题上换用中性灰阶与紧凑尺寸，强调色保持系统设置。
+// applyTheme 在系统主题上换用中性灰阶、紧凑尺寸和选定的字体，强调色保持系统设置。
 func (a *App) applyTheme(c *ui.Context) {
-	base := *c.Theme()
-	if a.themes.app == nil || a.themes.base != base {
-		app := appTheme(base)
+	base, ap := *c.Theme(), a.state.Appearance
+	if a.themes.app == nil || a.themes.base != base || a.themes.appearance != ap {
+		app := appTheme(base, uiFamily(ap.UIFont))
 		code := codeTheme(app)
-		a.themes = themeCache{base: base, app: app, sidebar: sidebarTheme(*app), code: code, md: mdTheme(app, code)}
+		a.themes = themeCache{
+			base: base, appearance: ap, app: app, sidebar: sidebarTheme(*app),
+			code: code, md: mdTheme(app, code, codeFamily(ap.CodeFont)),
+		}
 	}
 	c.SetTheme(a.themes.app)
 }
 
-func appTheme(t ui.Theme) *ui.Theme {
+func appTheme(t ui.Theme, font string) *ui.Theme {
+	t.Font = font
 	if t.Dark {
 		t.Background = ui.Hex("#151517")
 		t.Surface = ui.Hex("#1c1c1f")
@@ -217,8 +234,9 @@ func setTokens(th *editor.Theme, t *ui.Theme, tok [6]ui.Color) {
 }
 
 // mdTheme 是 Markdown 预览与悬停文档的配色：代码块的语法色与编辑器一致，底色沿用 MyGo 的代码框。
-func mdTheme(t *ui.Theme, code *editor.Theme) *markdown.Theme {
+func mdTheme(t *ui.Theme, code *editor.Theme, codeFont string) *markdown.Theme {
 	th := markdown.DefaultTheme(t)
+	th.CodeFont = codeFont
 	colors := *code
 	colors.Background = th.CodeBlockBackground
 	th.CodeColors = &colors
