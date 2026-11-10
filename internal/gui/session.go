@@ -48,6 +48,11 @@ type session struct {
 
 	previewList      ui.ListState
 	previewPages     []*ui.Bitmap
+	previewData      [][]byte // 每页 PNG 原始字节，见 pagetone.go
+	previewTone      pageTone // previewPages 的配色
+	recolorGen       uint64   // 新的页面或新的调色任务都会使进行中的调色过期
+	recolorTone      pageTone
+	recoloring       bool
 	previewPending   bool
 	previewEdit      time.Time
 	previewErr       string

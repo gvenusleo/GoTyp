@@ -85,7 +85,7 @@ func (w *Watch) start(ctx context.Context, req Request) error {
 	}
 	ctx, w.cancel = context.WithCancel(ctx)
 	cmd, stdin, err := watchCommand(ctx, []string{"watch", "--root", root, "--diagnostic-format", "short",
-		"--ppi", strconv.Itoa(previewPPI), main, filepath.Join(w.out, "page-{p}-of-{t}.png")})
+		"--ppi", strconv.Itoa(req.ppi()), main, filepath.Join(w.out, "page-{p}-of-{t}.png")})
 	if err != nil {
 		w.cancel()
 		return err

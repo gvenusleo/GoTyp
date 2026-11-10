@@ -64,12 +64,23 @@ func (a *App) stopPreview(s *session) {
 	s.activeRender = 0
 }
 
+// restartPreview 换清晰度后按新分辨率重新编译。常驻进程的分辨率在启动时固定，只能重启；
+// 新页面出来前继续显示旧页面。
+func (a *App) restartPreview(s *session) {
+	if s.kind != vault.KindTypst {
+		return
+	}
+	a.stopPreview(s)
+	s.renderAttempted = false
+}
+
 // schedulePreview 只在预览可见时安排编译，连续输入只保留最新快照。
 // 默认交给常驻的 typst watch 进程，进程反复失败后退回一次性编译。
 func (a *App) schedulePreview(c *ui.Context, s *session) {
 	if a.current != s || s.kind != vault.KindTypst || a.mode == modeEdit || a.vault == nil {
 		return
 	}
+	a.recolorPreview(s)
 	oneShot := s.watchFails >= maxWatchFails
 	if !s.previewPending && previewStale(s, oneShot) {
 		s.previewPending = true
@@ -112,6 +123,8 @@ type previewResult struct {
 	id      uint64
 	version uint64
 	pages   []*ui.Bitmap
+	data    [][]byte // 每页 PNG 原始字节，切换主题时据此重新调色
+	tone    pageTone // pages 解码时用的配色
 	dur     time.Duration
 	diag    string
 	err     error
@@ -126,7 +139,8 @@ func (a *App) startPreview(s *session) {
 	}
 	id := s.renderGeneration
 	version := s.observed
-	req := typst.Request{Root: a.vault.Root(), LogicalPath: s.id, Source: s.text()}
+	req := typst.Request{Root: a.vault.Root(), LogicalPath: s.id, Source: s.text(), PPI: a.state.Appearance.PreviewPPI}
+	tone := a.pageTone()
 	ctx, cancel := context.WithCancel(a.ctx)
 	s.activeRender = id
 	s.renderCancel = cancel
@@ -138,29 +152,15 @@ func (a *App) startPreview(s *session) {
 		dur := time.Since(start)
 		var pages []*ui.Bitmap
 		if err == nil {
-			pages, err = decodePages(result.Files)
+			pages, err = decodePages(result.Files, tone)
 		}
 		a.publish(func() {
 			a.finishPreview(s, previewResult{
-				id: id, version: version, pages: pages, dur: dur, diag: result.Diagnostics, err: err,
+				id: id, version: version, pages: pages, data: result.Files, tone: tone,
+				dur: dur, diag: result.Diagnostics, err: err,
 			})
 		})
 	}()
-}
-
-func decodePages(files [][]byte) ([]*ui.Bitmap, error) {
-	pages := make([]*ui.Bitmap, 0, len(files))
-	for _, data := range files {
-		page, err := ui.DecodeBitmap(data)
-		if err != nil {
-			return nil, err
-		}
-		pages = append(pages, page)
-	}
-	if len(pages) == 0 {
-		return nil, errors.New("Typst 没有生成页面")
-	}
-	return pages, nil
 }
 
 func (a *App) finishPreview(s *session, result previewResult) {
@@ -180,7 +180,7 @@ func (a *App) finishPreview(s *session, result previewResult) {
 		s.previewErr = result.err.Error()
 		return
 	}
-	s.previewPages = result.pages
+	s.setPreviewPages(result)
 	s.previewErr = ""
 	s.previewDiag = result.diag
 }

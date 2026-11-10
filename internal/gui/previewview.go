@@ -31,7 +31,16 @@ func (a *App) markdownPreviewView(c *ui.Context, s *session) {
 
 func (a *App) typstPreviewView(c *ui.Context, s *session) {
 	t := c.Theme()
-	ui.Column(c).Grow(1).MinWidth(0).Background(t.Surface).Label("Typst 预览").Children(func() {
+	col := ui.Column(c).Grow(1).MinWidth(0).Background(t.Surface).Label("Typst 预览")
+	// 100% 的页宽取决于预览区宽度，这里用上一帧的尺寸；第一帧没有尺寸时按最大页宽。
+	room := col.Bounds().W - 2*previewInset
+	fit := float32(pageWidth)
+	if room > 0 {
+		fit = min(fit, room)
+	}
+	zoom := a.zoomFactor()
+	width := fit * zoom
+	col.Children(func() {
 		a.diagnosticsView(c, s)
 		if len(s.previewPages) == 0 {
 			a.typstEmptyView(c, s)
@@ -39,14 +48,21 @@ func (a *App) typstPreviewView(c *ui.Context, s *session) {
 		}
 		s.previewList.Key = func(i int) any { return i }
 		s.previewList.Label = func(i int) string { return fmt.Sprintf("第 %d 页", i+1) }
-		ui.List(c, &s.previewList, len(s.previewPages), func(i int) {
+		list := ui.List(c, &s.previewList, len(s.previewPages), func(i int) {
 			page := s.previewPages[i]
 			w, h := ui.ImageSize(page)
 			ui.Row(c).FillWidth().Justify(ui.Center).Children(func() {
-				ui.Image(c, page).MaxWidth(pageWidth).MaxWidthPercent(100).AspectRatio(w/h).
-					Border(1, t.Border).Shadow(0, 1, 4, 0, pageShadowColor).Label(fmt.Sprintf("第 %d 页", i+1))
+				img := ui.Image(c, page).Width(width).AspectRatio(w / h)
+				if zoom <= 1 {
+					// 窗口缩窄时上一帧的宽度还没更新，先按比例收住，不出现横向滚动。
+					img.MaxWidthPercent(100)
+				}
+				img.Border(1, t.Border).Shadow(0, 1, 4, 0, pageShadowColor).Label(fmt.Sprintf("第 %d 页", i+1))
 			})
-		}).Grow(1).Gap(previewInset).Padding(previewInset)
+		}).Grow(1).Gap(previewInset).Padding(previewInset).HandleInput(a.zoomInput)
+		if zoom > 1 && width > room {
+			list.RowWidth(width)
+		}
 	})
 }
 

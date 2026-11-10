@@ -164,7 +164,9 @@ func (a *App) renamed(from, to string) {
 	s.updateLanguage()
 	a.attachLSP(s)
 	s.previewList = ui.ListState{}
-	s.previewPages = nil
+	s.previewPages, s.previewData = nil, nil
+	s.recolorGen++
+	s.recoloring = false
 	s.previewErr, s.previewDiag = "", ""
 	s.previewMissing = false
 	s.previewErrOpen = false

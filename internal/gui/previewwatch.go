@@ -25,6 +25,7 @@ const (
 type watchJob struct {
 	source  string
 	version uint64
+	tone    pageTone
 }
 
 // watchHandle 连接主线程与一篇笔记的后台编译循环。jobs 只保留最新一份快照。
@@ -35,7 +36,7 @@ type watchHandle struct {
 
 // sendWatch 把当前快照交给常驻进程，没有进程时先启动。
 func (a *App) sendWatch(s *session, now time.Time) {
-	job := watchJob{source: s.text(), version: s.observed}
+	job := watchJob{source: s.text(), version: s.observed, tone: a.pageTone()}
 	s.previewPending = false
 	s.previewEdit = time.Time{}
 	s.sentVersion = job.version
@@ -47,8 +48,8 @@ func (a *App) sendWatch(s *session, now time.Time) {
 		ctx, cancel := context.WithCancel(a.ctx)
 		h := &watchHandle{jobs: make(chan watchJob, 1), cancel: cancel}
 		s.watch = h
-		req := typst.Request{Root: a.vault.Root(), LogicalPath: s.id, Source: job.source}
-		go a.runWatch(ctx, s, h, req, job.version)
+		req := typst.Request{Root: a.vault.Root(), LogicalPath: s.id, Source: job.source, PPI: a.state.Appearance.PreviewPPI}
+		go a.runWatch(ctx, s, h, req, job)
 		return
 	}
 	select {
@@ -73,7 +74,7 @@ type watchOutcome struct {
 
 // runWatch 是一篇笔记的后台编译循环：同一时间只有一份快照在等待结果，期间的新快照留到结果之后再写入。
 // 页面位图在这里解码，未变化的页面沿用上一次的位图。
-func (a *App) runWatch(ctx context.Context, s *session, h *watchHandle, req typst.Request, version uint64) {
+func (a *App) runWatch(ctx context.Context, s *session, h *watchHandle, req typst.Request, first watchJob) {
 	w, err := typst.StartWatch(ctx, req)
 	if err != nil {
 		a.publish(func() { a.watchFailed(s, h, err) })
@@ -94,7 +95,7 @@ func (a *App) runWatch(ctx context.Context, s *session, h *watchHandle, req typs
 			}
 		}
 	}()
-	loop := watchLoop{written: version, waiting: true, timeout: time.After(watchTimeout)}
+	loop := watchLoop{written: first.version, tone: first.tone, waiting: true, timeout: time.After(watchTimeout)}
 	for {
 		select {
 		case <-ctx.Done():
@@ -131,6 +132,9 @@ type watchLoop struct {
 	pending   *watchJob
 	timeout   <-chan time.Time
 	pages     []*ui.Bitmap
+	data      [][]byte
+	pageTone  pageTone // pages 解码时用的配色
+	tone      pageTone // 最近写入的快照所处的配色
 	last      previewResult
 	republish bool
 }
@@ -146,6 +150,7 @@ func (l *watchLoop) flush(w *typst.Watch) error {
 	}
 	job := *l.pending
 	l.pending = nil
+	l.tone = job.tone
 	changed, err := w.Write(job.source)
 	if err != nil {
 		return err
@@ -164,37 +169,47 @@ func (l *watchLoop) flush(w *typst.Watch) error {
 // finish 把一次编译结果合并进当前页面。依赖文件变化引起的编译同样归到最近写入的版本。
 func (l *watchLoop) finish(r typst.WatchResult) previewResult {
 	l.waiting, l.timeout = false, nil
-	res := previewResult{version: l.written, pages: l.pages, dur: r.Duration, diag: r.Diagnostics, err: r.Err}
+	res := previewResult{version: l.written, pages: l.pages, data: l.data, tone: l.pageTone, dur: r.Duration, diag: r.Diagnostics, err: r.Err}
 	if r.Err == nil {
-		pages, err := mergePages(l.pages, r.Pages)
+		old := l.pages
+		if l.pageTone != l.tone {
+			// 主题变了，旧位图的配色不能再沿用，全部按原始字节重新解码。
+			old = nil
+		}
+		pages, data, err := mergePages(old, l.data, r.Pages, l.tone)
 		if err != nil {
 			res.err = err
 		} else {
-			l.pages, res.pages = pages, pages
+			l.pages, l.data, l.pageTone = pages, data, l.tone
+			res.pages, res.data, res.tone = pages, data, l.tone
 		}
 	}
 	l.last = res
 	return res
 }
 
-// mergePages 只解码有新数据的页面，其余沿用旧位图。
-func mergePages(old []*ui.Bitmap, files [][]byte) ([]*ui.Bitmap, error) {
+// mergePages 只解码有新数据的页面，其余沿用旧位图；没有可沿用的位图时用上一次的原始字节重新解码。
+func mergePages(old []*ui.Bitmap, oldData, files [][]byte, tone pageTone) ([]*ui.Bitmap, [][]byte, error) {
 	pages := make([]*ui.Bitmap, len(files))
-	for i, data := range files {
-		if data == nil && i < len(old) {
-			pages[i] = old[i]
-			continue
+	data := make([][]byte, len(files))
+	for i, file := range files {
+		if file == nil && i < len(oldData) {
+			file = oldData[i]
+			if i < len(old) {
+				pages[i], data[i] = old[i], file
+				continue
+			}
 		}
-		if data == nil {
-			return nil, errors.New("Typst 预览缺少页面")
+		if file == nil {
+			return nil, nil, errors.New("Typst 预览缺少页面")
 		}
-		page, err := ui.DecodeBitmap(data)
+		page, err := decodePage(file, tone)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		pages[i] = page
+		pages[i], data[i] = page, file
 	}
-	return pages, nil
+	return pages, data, nil
 }
 
 // finishWatch 在主线程应用编译结果，只接受当前笔记、当前进程和当前源版本的结果。
@@ -213,7 +228,7 @@ func (a *App) finishWatch(s *session, h *watchHandle, res previewResult) {
 		s.previewErr = res.err.Error()
 		return
 	}
-	s.previewPages = res.pages
+	s.setPreviewPages(res)
 	s.previewErr = ""
 	s.previewDiag = res.diag
 }
