@@ -45,7 +45,7 @@ GoTyp 是本地桌面笔记应用。用户打开一个文件夹作为笔记仓�
 
 界面风格参考 Linear：极简、紧凑，只用中性灰阶、细分隔线和少量图标区分层次，不放解释性文字。
 
-- 视觉参数集中在 `internal/gui/theme.go`，强调色跟随系统；编辑器语法色和 Markdown 预览的配色也在这里显式给出，不依赖 MyGo 默认值
+- 视觉参数集中在 `internal/gui/theme.go`，强调色跟随系统；编辑器和 Markdown 代码块的语法色沿用 MyGo 默认配色，这里只调整编辑器底色、当前行、行号和诊断色；Markdown 预览的版式在这里显式给出
 - 选中、悬停和按下都用文字色叠在底色上的中性浅底，强调色只用于光标、选区和焦点
 - 只使用 MyGo 原生组件，不用 `ui.Painter` 或着色器绘制业务 UI，不自定义 Markdown 文档组件
 - 图标使用内嵌的 Lucide 图标集（`internal/gui/icons`），纯图标按钮必须设置 `Label` 和 `Tooltip`
@@ -114,7 +114,7 @@ Vault 是普通文件夹，GoTyp 不向其中写入任何自己的文件。应�
 
 ## Markdown 预览
 
-预览读取当前编辑快照，使用 `markdown.View` 默认主题和组件，阅读宽度约 720 DIP 居中。本地图片通过 `markdown.FileImages` 按笔记目录解析，不下载远程图片。
+预览读取当前编辑快照，使用 `markdown.View` 默认组件，阅读宽度约 720 DIP 居中。版式接近 GitHub：一、二级标题下有横线，标题、段落和列表间距与 GitHub 相近，代码块无边框，表格隔行着色；链接仍用系统强调色。悬停文档沿用紧凑的 Markdown 主题。语法支持 GFM、脚注和 GitHub Alert；不解析 @提及和 #引用。数学公式暂不渲染，按 TeX 源码显示。本地图片通过 `markdown.FileImages` 按笔记目录解析，不下载远程图片。
 
 链接处理：页内锚点交给 Markdown 组件；Vault 内的笔记在 GoTyp 中打开；`http`、`https`、`mailto` 和 Vault 内其他文件交给系统打开；不存在、逃出 Vault 或无法识别的目标只提示错误。
 
