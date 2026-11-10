@@ -104,6 +104,7 @@ type themeCache struct {
 	sidebar    *ui.Theme
 	code       *editor.Theme
 	md         *markdown.Theme
+	preview    *markdown.Theme
 }
 
 // applyTheme 在系统主题上换用中性灰阶、紧凑尺寸和选定的字体，强调色保持系统设置。
@@ -112,9 +113,10 @@ func (a *App) applyTheme(c *ui.Context) {
 	if a.themes.app == nil || a.themes.base != base || a.themes.appearance != ap {
 		app := appTheme(base, uiFamily(ap.UIFont))
 		code := codeTheme(app)
+		md := mdTheme(app, code, codeFamily(ap.CodeFont))
 		a.themes = themeCache{
 			base: base, appearance: ap, app: app, sidebar: sidebarTheme(*app),
-			code: code, md: mdTheme(app, code, codeFamily(ap.CodeFont)),
+			code: code, md: md, preview: previewTheme(app, md),
 		}
 	}
 	c.SetTheme(a.themes.app)
@@ -185,8 +187,8 @@ func raisedFill(t *ui.Theme) ui.Color {
 	return t.Background
 }
 
-// codeTheme 是编辑器与 Markdown 代码块的配色。在 MyGo 默认值上改：底色与主区一致，
-// 当前行和行号更淡，语法色取 GitHub 的一组，标题保持正文色加粗，让笔记源码读起来安静。
+// codeTheme 是编辑器与 Markdown 代码块的配色。语法色沿用 MyGo 默认配色，
+// 只把底色改成与主区一致，当前行和行号更淡，诊断色跟随界面主题。
 func codeTheme(t *ui.Theme) *editor.Theme {
 	th := editor.DefaultTheme(t)
 	th.Background, th.Text = t.Background, t.Text
@@ -195,42 +197,7 @@ func codeTheme(t *ui.Theme) *editor.Theme {
 	th.ActiveLine = t.Text.Alpha(0.03)
 	th.IndentGuide = t.Border
 	th.Error, th.Warning, th.Hint = t.Danger, t.Warning, t.TextMuted
-	tok := [6]ui.Color{
-		ui.Hex("#CF222E"), ui.Hex("#0A3069"), ui.Hex("#0550AE"),
-		ui.Hex("#8250DF"), ui.Hex("#953800"), ui.Hex("#116329"),
-	}
-	if t.Dark {
-		tok = [6]ui.Color{
-			ui.Hex("#FF7B72"), ui.Hex("#A5D6FF"), ui.Hex("#79C0FF"),
-			ui.Hex("#D2A8FF"), ui.Hex("#FFA657"), ui.Hex("#7EE787"),
-		}
-	}
-	setTokens(th, t, tok)
 	return th
-}
-
-// setTokens 给语法色全部显式设色，tok 依次是关键字、字符串、数字、函数、类型与标签的颜色。
-func setTokens(th *editor.Theme, t *ui.Theme, tok [6]ui.Color) {
-	set := func(color ui.Color, kinds ...editor.TokenKind) {
-		for _, k := range kinds {
-			th.Tokens[k].Color = color
-		}
-	}
-	set(t.Text, editor.TokenText, editor.TokenVariable, editor.TokenPunctuation,
-		editor.TokenEmphasis, editor.TokenStrong, editor.TokenHeading)
-	set(tok[0], editor.TokenKeyword, editor.TokenOperator)
-	set(tok[1], editor.TokenString, editor.TokenLink, editor.TokenCode)
-	set(tok[2], editor.TokenNumber, editor.TokenConstant, editor.TokenProperty,
-		editor.TokenAttribute, editor.TokenEscape)
-	set(tok[3], editor.TokenFunction, editor.TokenMeta)
-	set(tok[4], editor.TokenType)
-	set(tok[5], editor.TokenTag, editor.TokenRegexp)
-	set(t.TextMuted, editor.TokenComment)
-	set(t.Success, editor.TokenInserted)
-	set(t.Danger, editor.TokenDeleted, editor.TokenInvalid)
-	th.Tokens[editor.TokenEmphasis].Italic = true
-	th.Tokens[editor.TokenStrong].Bold = true
-	th.Tokens[editor.TokenHeading].Bold = true
 }
 
 // mdTheme 是 Markdown 预览与悬停文档的配色：代码块的语法色与编辑器一致，底色沿用 MyGo 的代码框。
@@ -241,6 +208,32 @@ func mdTheme(t *ui.Theme, code *editor.Theme, codeFont string) *markdown.Theme {
 	colors.Background = th.CodeBlockBackground
 	th.CodeColors = &colors
 	return th
+}
+
+// previewTheme 让笔记预览的版式接近 GitHub：一、二级标题下有横线，标题和段落间距更宽松，
+// 代码块无边框，表格隔行着色。悬停文档空间小，仍用 mdTheme。强调色继续跟随系统，不用 GitHub 蓝。
+func previewTheme(t *ui.Theme, md *markdown.Theme) *markdown.Theme {
+	th := *md
+	sizes := [6]float32{2, 1.5, 1.25, 1, 0.875, 0.85}
+	for i := range th.Headings {
+		h := &th.Headings[i]
+		h.Size, h.Weight, h.Top, h.Bottom = sizes[i], 600, 1.5, 1
+		h.Rule = i < 2
+	}
+	th.BlockSpacing = 1
+	th.ListIndent = 2
+	th.CodeSize = 0.85
+	// 边框与底色同为不透明色才能隐去边框；半透明底色叠上同色边框，边缘会变深。
+	th.CodeBlockBackground, th.CodeBlockBorder = t.Surface, t.Surface
+	colors := *md.CodeColors
+	colors.Background = t.Surface
+	th.CodeColors = &colors
+	th.CodeBlockPadding = 1
+	th.QuoteBarWidth = 4
+	th.TableHeader = t.Background
+	th.TableStripe = t.Text.Alpha(0.04)
+	th.TableCellPadding = [2]float32{0.8, 0.4}
+	return &th
 }
 
 // bannerMotion 让提示行展开出现、收起消失，避免内容突然跳动。

@@ -14,6 +14,7 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
+	"github.com/egoist/mygo/ui/markdown/parser"
 
 	"gotyp/internal/typst"
 	"gotyp/internal/vault"
@@ -27,7 +28,8 @@ const (
 
 // configurePreview 为每篇笔记建立独立图片缓存，避免不同目录的同名图片串用。
 func (a *App) configurePreview(s *session) {
-	s.md = markdown.Options{}
+	// 本地笔记不关联 GitHub 仓库，@用户名和 #123 无处可链，按普通文字显示。
+	s.md = markdown.Options{Extensions: parser.Default &^ (parser.ExtMentions | parser.ExtReferences)}
 	if a.vault != nil {
 		if name, err := a.vault.Resolve(s.id); err == nil {
 			s.md.LoadImage = markdown.FileImages(filepath.Dir(name))
