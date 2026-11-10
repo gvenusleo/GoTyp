@@ -2,13 +2,17 @@ package gui
 
 import "github.com/egoist/mygo/ui"
 
-// settingsCategory 是设置面板左侧的一个分类。
+// settingsCategory 是设置面板左侧的一个分类，view 画它右侧的各项。
 type settingsCategory struct {
 	name string
 	icon *ui.SVG
+	view func(a *App, c *ui.Context)
 }
 
-var settingsCategories = []settingsCategory{{"外观", iconPalette}}
+var settingsCategories = []settingsCategory{
+	{"外观", iconPalette, (*App).appearanceView},
+	{"预览", iconEye, (*App).previewSettingsView},
+}
 
 // settingsView 是设置面板：左侧是分类，右侧是当前分类的各项，右上角关闭。
 func (a *App) settingsView(c *ui.Context) {
@@ -72,7 +76,9 @@ func (a *App) settingsContent(c *ui.Context) {
 					OnClick(func() { a.settings.open = false })
 			})
 		ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
-			ui.Column(c).Gap(settingsGap).Padding(settingsPad).Children(func() { a.appearanceView(c) })
+			ui.Column(c).Gap(settingsGap).Padding(settingsPad).Children(func() {
+				settingsCategories[a.settings.category].view(a, c)
+			})
 		})
 	})
 }
@@ -88,6 +94,18 @@ func (a *App) appearanceView(c *ui.Context) {
 		fontBox(c, "代码字体", &s.codeFont, s.codeFonts, a.chooseFonts)
 	})
 	a.fontPreview(c)
+}
+
+// previewSettingsView 画「预览」：Typst 预览的清晰度和深色主题下是否调色。
+func (a *App) previewSettingsView(c *ui.Context) {
+	s := &a.settings
+	settingRow(c, "Typst 预览清晰度", func() {
+		ui.Select(c.Key("settings-clarity"), &s.clarity, clarityLabels()).Label("Typst 预览清晰度").
+			Width(comboWidth).FontSize(textSize).OnChange(a.choosePreview)
+	})
+	settingRow(c, "深色主题下给 Typst 预览调色", func() {
+		ui.Switch(c.Key("settings-recolor"), &s.recolor).Label("深色主题下给 Typst 预览调色").OnChange(a.choosePreview)
+	})
 }
 
 // themeSwitch 与文档头的模式分段同一种样式：浅色轨道，选中段浮起。

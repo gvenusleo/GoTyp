@@ -2,6 +2,7 @@ package gui
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"time"
 	"unicode/utf8"
@@ -43,6 +44,9 @@ func (a *App) statusBarView(c *ui.Context, s *session) {
 			statusItem(c, tip, nil, thousands(st.words)+" 字", t.TextMuted, nil, false)
 		}
 		if width >= statusPagesWidth && s.kind == vault.KindTypst && len(s.previewPages) > 0 {
+			if z := int(math.Round(float64(a.zoomFactor()) * 100)); z != 100 && a.zoomable() {
+				statusItem(c, "恢复 100% ⌘0", nil, strconv.Itoa(z)+"%", t.TextMuted, a.resetPreviewZoom, false)
+			}
 			statusItem(c, "页数", nil, strconv.Itoa(len(s.previewPages))+" 页", t.TextMuted, nil, false)
 		}
 	})

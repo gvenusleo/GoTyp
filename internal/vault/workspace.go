@@ -24,11 +24,15 @@ type Workspace struct {
 	SidebarHidden   bool `json:"sidebarHidden,omitempty"`
 }
 
-// Appearance 是与仓库无关的外观设置。空串表示默认：主题跟随系统，字体用系统的。
+// Appearance 是与仓库无关的外观与预览设置。零值表示默认：主题跟随系统，字体用系统的，预览用默认清晰度且不调色。
 type Appearance struct {
 	Theme    string `json:"theme,omitempty"`
 	UIFont   string `json:"uiFont,omitempty"`
 	CodeFont string `json:"codeFont,omitempty"`
+	// PreviewPPI 是 Typst 预览的分辨率，零值表示默认。
+	PreviewPPI int `json:"previewPPI,omitempty"`
+	// RecolorPreview 表示深色主题下给 Typst 预览调色，默认不调色。
+	RecolorPreview bool `json:"recolorPreview,omitempty"`
 }
 
 // State 是保存在用户配置目录中的应用状态。它可以随时删除，不影响任何笔记。

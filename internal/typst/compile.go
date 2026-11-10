@@ -17,14 +17,23 @@ import (
 // ErrUnavailable 表示 PATH 中没有 Typst CLI。
 var ErrUnavailable = errors.New("未找到 Typst 编译器，请安装 typst 并加入 PATH")
 
-// previewPPI 是预览 PNG 的分辨率。预览页面最宽约 800 DIP，192 ppi 让 A4 页面在 2 倍屏上也足够清晰。
-const previewPPI = 192
+// DefaultPPI 是预览 PNG 的默认分辨率。预览页面最宽约 800 DIP，192 ppi 让 A4 页面在 2 倍屏上也足够清晰。
+const DefaultPPI = 192
 
 // Request 描述一篇笔记的不可变源码快照。
 type Request struct {
 	Root        string
 	LogicalPath string
 	Source      string
+	// PPI 是 PNG 预览的分辨率，零值用 DefaultPPI；导出 PDF 时不用。
+	PPI int
+}
+
+func (r Request) ppi() int {
+	if r.PPI <= 0 {
+		return DefaultPPI
+	}
+	return r.PPI
 }
 
 // Result 包含编译产物和编译器输出的警告。
@@ -77,7 +86,7 @@ func compile(ctx context.Context, req Request, out format) (Result, error) {
 	}
 	args := []string{"compile", "--root", root, "--diagnostic-format", "short"}
 	if out == formatPNG {
-		args = append(args, "--ppi", strconv.Itoa(previewPPI))
+		args = append(args, "--ppi", strconv.Itoa(req.ppi()))
 	}
 	args = append(args, main, output)
 	cmd := exec.CommandContext(ctx, "typst", args...)

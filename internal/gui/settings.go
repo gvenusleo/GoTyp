@@ -6,6 +6,7 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
+	"gotyp/internal/typst"
 	"gotyp/internal/vault"
 )
 
@@ -40,6 +41,43 @@ func themeIndex(name string) int {
 	return slices.IndexFunc(themeChoices, func(c themeChoice) bool { return c.source == source })
 }
 
+// clarityChoice 是预览清晰度的一项。
+type clarityChoice struct {
+	label string
+	ppi   int
+}
+
+// clarityChoices 的次序与界面一致。最高一档的位图是默认的两倍多，留给大屏和常放大看的用户。
+var clarityChoices = []clarityChoice{{"标准", 144}, {"高", typst.DefaultPPI}, {"最高", 288}}
+
+func clarityLabels() []string {
+	labels := make([]string, len(clarityChoices))
+	for i, choice := range clarityChoices {
+		labels[i] = choice.label
+	}
+	return labels
+}
+
+// clarityLabel 把保存的分辨率换成选项名，零值和不认识的值都按默认。
+func clarityLabel(ppi int) string {
+	for _, choice := range clarityChoices {
+		if choice.ppi == ppi {
+			return choice.label
+		}
+	}
+	return clarityLabel(typst.DefaultPPI)
+}
+
+// claritySetting 把选项名换回要保存的分辨率，默认一档存为零值。
+func claritySetting(label string) int {
+	for _, choice := range clarityChoices {
+		if choice.label == label && choice.ppi != typst.DefaultPPI {
+			return choice.ppi
+		}
+	}
+	return 0
+}
+
 // uiFamily 是界面字体族：缺的字形退回系统界面字体；空表示系统的。
 func uiFamily(name string) string {
 	if name == "" {
@@ -67,6 +105,8 @@ type settingsState struct {
 	uiFont, codeFont string
 	// 字体框的选项，默认的在最前；系统字体读回之前只有默认的。
 	uiFonts, codeFonts []string
+	clarity            string
+	recolor            bool
 }
 
 func (a *App) openSettings() {
@@ -77,6 +117,7 @@ func (a *App) openSettings() {
 		theme:  themeIndex(ap.Theme),
 		uiFont: fontLabel(ap.UIFont), codeFont: fontLabel(ap.CodeFont),
 		uiFonts: []string{defaultFont}, codeFonts: []string{defaultFont},
+		clarity: clarityLabel(ap.PreviewPPI), recolor: ap.RecolorPreview,
 	}
 	a.loadFonts(s.gen)
 }
@@ -130,6 +171,12 @@ func (a *App) chooseFonts() {
 	a.setAppearance(ap)
 }
 
+func (a *App) choosePreview() {
+	ap := a.state.Appearance
+	ap.PreviewPPI, ap.RecolorPreview = claritySetting(a.settings.clarity), a.settings.recolor
+	a.setAppearance(ap)
+}
+
 // setAppearance 立即生效并保存。界面主题按外观设置缓存（见 applyTheme），下一帧自动重建；
 // 编辑器字体存在会话里，这里同步。
 func (a *App) setAppearance(ap vault.Appearance) {
@@ -145,6 +192,10 @@ func (a *App) setAppearance(ap vault.Appearance) {
 	}
 	if a.current != nil {
 		a.applyEditorPrefs(a.current)
+		if ap.PreviewPPI != old.PreviewPPI {
+			a.restartPreview(a.current)
+		}
 	}
+	// 调色开关不用在这里处理：预览按 pageTone 发现配色不一致后自行重新调色。
 	a.saveState()
 }

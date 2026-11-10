@@ -42,6 +42,12 @@ func (a *App) handleShortcuts(c *ui.Context) {
 		a.openSettings()
 	case c.Shortcut(ui.Cmd|ui.Alt, ui.KeyF):
 		a.toggleFocus()
+	case c.Shortcut(ui.Cmd, ui.KeyEqual):
+		a.stepPreviewZoom(1)
+	case c.Shortcut(ui.Cmd, ui.KeyMinus):
+		a.stepPreviewZoom(-1)
+	case c.Shortcut(ui.Cmd, ui.Key0):
+		a.resetPreviewZoom()
 	case a.focus && c.Shortcut(0, ui.KeyEscape):
 		a.focus = false
 		a.refreshMenu()

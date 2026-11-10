@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"image"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,6 +67,25 @@ func TestFinishPreviewDropsStaleResult(t *testing.T) {
 	a.finishPreview(s, previewResult{id: 1, version: 2, pages: []*ui.Bitmap{nil}})
 	if s.activeRender != 0 || s.renderAttempted || !s.previewPending || len(s.previewPages) != 0 {
 		t.Fatalf("stale result applied: %+v", s)
+	}
+}
+
+// 调色期间换上了新的编译结果，基于旧页面的调色结果不能覆盖新页面。
+func TestFinishRecolorDropsStaleResult(t *testing.T) {
+	a := newApp()
+	s := newSession("note.typ", "= Title", vault.FileStat{})
+	a.current = s
+	s.setPreviewPages(previewResult{pages: []*ui.Bitmap{nil}, data: [][]byte{nil}, tone: pageTone{dark: true}})
+	a.recolorPreview(s)
+	if !s.recoloring {
+		t.Fatal("recolor did not start")
+	}
+	stale := s.recolorGen
+	fresh := ui.NewBitmap(image.NewNRGBA(image.Rect(0, 0, 1, 1)))
+	s.setPreviewPages(previewResult{pages: []*ui.Bitmap{fresh}, data: [][]byte{nil}})
+	a.finishRecolor(s, stale, pageTone{}, []*ui.Bitmap{nil}, nil)
+	if s.previewPages[0] != fresh {
+		t.Fatal("stale recolor replaced newer pages")
 	}
 }
 

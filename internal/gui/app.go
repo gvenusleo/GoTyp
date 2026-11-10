@@ -61,6 +61,8 @@ type App struct {
 
 	// focus 只在会话内生效，不写入工作区状态。
 	focus bool
+	// previewZoom 是 Typst 预览缩放，各笔记共用，不写入工作区状态。
+	previewZoom float32
 
 	// busy 表示正在切换、加载或改动文件，期间不能开始新的切换。
 	busy         bool
@@ -162,6 +164,10 @@ func (a *App) setMenu() {
 			{Label: "显示侧栏", Type: mygo.MenuItemCheckbox, Accelerator: "CmdOrCtrl+B", Checked: !a.sidebarHidden, Click: action(a.toggleSidebar)},
 			{Label: "显示行号", Type: mygo.MenuItemCheckbox, Checked: a.lineNumbers, Click: action(a.toggleLineNumbers)},
 			{Label: "专注模式", Type: mygo.MenuItemCheckbox, Accelerator: "CmdOrCtrl+Alt+F", Checked: a.focus, Click: action(a.toggleFocus)},
+			mygo.Separator(),
+			{Label: "放大预览", Accelerator: "CmdOrCtrl+=", Click: action(func() { a.stepPreviewZoom(1) })},
+			{Label: "缩小预览", Accelerator: "CmdOrCtrl+-", Click: action(func() { a.stepPreviewZoom(-1) })},
+			{Label: "恢复预览大小", Accelerator: "CmdOrCtrl+0", Click: action(a.resetPreviewZoom)},
 			mygo.Separator(),
 			{Role: mygo.RoleToggleFullScreen},
 		}},
