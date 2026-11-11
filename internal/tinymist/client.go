@@ -284,10 +284,30 @@ func (cl *Client) Close() {
 		// 进程结束后才删，避免删除时它还在写导出文件。
 		defer os.RemoveAll(dir)
 	}
+	shutdown(cl.ctx, c)
+}
+
+// Suspend 结束空闲的进程，把字体和图片缓存占用的内存还给系统。客户端仍然可用，
+// 下次请求时重新启动进程；主动结束不算崩溃，重启次数重新计算。
+func (cl *Client) Suspend() {
+	cl.mu.Lock()
+	c := cl.conn
+	cl.conn = nil
+	if !cl.disabled {
+		cl.starts = 0
+	}
+	// 旧连接上打开的文档在新进程中都要重新 didOpen。
+	cl.docs.Clear()
+	cl.mu.Unlock()
+	shutdown(cl.ctx, c)
+}
+
+// shutdown 按 LSP 约定结束进程，超时后关闭标准输入，tinymist 随之退出。
+func shutdown(ctx context.Context, c *conn) {
 	if c == nil || c.closed() {
 		return
 	}
-	ctx, cancel := context.WithTimeout(cl.ctx, shutdownTimeout)
+	ctx, cancel := context.WithTimeout(ctx, shutdownTimeout)
 	defer cancel()
 	if c.call(ctx, "shutdown", nil, nil) == nil {
 		c.notify("exit", nil)
