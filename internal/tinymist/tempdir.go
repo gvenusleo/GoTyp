@@ -1,4 +1,4 @@
-package typst
+package tinymist
 
 import (
 	"fmt"

@@ -2,9 +2,7 @@ package gui
 
 import (
 	"fmt"
-	"math"
 	"strconv"
-	"time"
 	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
@@ -12,9 +10,9 @@ import (
 	"gotyp/internal/vault"
 )
 
-// statusBarView 是内容区底部的状态栏：左侧是编译状态和后台活动，右侧是编辑位置和统计。
+// statusBarView 是内容区底部的状态栏：左侧是诊断状态和后台活动，右侧是编辑位置和统计。
 // 保存状态由文件名旁的圆点和编辑区上方的提示行表达，不在这里重复。
-// 窄窗口下依次隐藏页数、字数和位置，编译错误始终保留。
+// 窄窗口下依次隐藏字数和位置，诊断计数始终保留。
 func (a *App) statusBarView(c *ui.Context, s *session) {
 	t := c.Theme()
 	width := a.contentWidth(c)
@@ -30,9 +28,6 @@ func (a *App) statusBarView(c *ui.Context, s *session) {
 		if s.kind == vault.KindTypst {
 			a.compileStatus(c, s)
 		}
-		if s.exporting {
-			statusItem(c, "正在导出 PDF", nil, "正在导出 PDF", t.TextMuted, nil, true)
-		}
 		ui.Spacer(c)
 		if width >= statusPositionWidth {
 			a.positionStatus(c, s)
@@ -43,24 +38,18 @@ func (a *App) statusBarView(c *ui.Context, s *session) {
 				thousands(st.chars), thousands(st.lines), max(1, (st.words+299)/300))
 			statusItem(c, tip, nil, thousands(st.words)+" 字", t.TextMuted, nil, false)
 		}
-		if width >= statusPagesWidth && s.kind == vault.KindTypst && len(s.previewPages) > 0 {
-			if z := int(math.Round(float64(a.zoomFactor()) * 100)); z != 100 && a.zoomable() {
-				statusItem(c, "恢复 100% ⌘0", nil, strconv.Itoa(z)+"%", t.TextMuted, a.resetPreviewZoom, false)
-			}
-			statusItem(c, "页数", nil, strconv.Itoa(len(s.previewPages))+" 页", t.TextMuted, nil, false)
-		}
 	})
 }
 
 func (a *App) compileStatus(c *ui.Context, s *session) {
 	t := c.Theme()
-	_, errors, warnings := typstDiagnostics(s)
+	errors, warnings := a.diagReport.errors, a.diagReport.warnings
 	switch {
 	case previewUnavailable(s):
-		statusItem(c, s.previewErr, iconAlert, "未找到 typst", t.TextMuted, nil, false)
+		statusItem(c, s.previewErr, iconAlert, "tinymist 不可用", t.TextMuted, nil, false)
 		return
-	case previewBusy(c, s):
-		statusItem(c, "正在编译", nil, "编译中", t.TextMuted, nil, true)
+	case s.previewStarting && a.mode != modeEdit:
+		statusItem(c, "正在启动 Typst 预览", nil, "启动预览", t.TextMuted, nil, true)
 		return
 	}
 	if errors > 0 {
@@ -68,9 +57,6 @@ func (a *App) compileStatus(c *ui.Context, s *session) {
 	}
 	if warnings > 0 {
 		statusItem(c, "查看编译警告", iconWarning, fmt.Sprintf("%d 个警告", warnings), t.Warning, a.statusDiagnostics, false)
-	}
-	if errors == 0 && warnings == 0 && s.previewDur > 0 {
-		statusItem(c, "上次编译耗时", iconCheck, formatCompile(s.previewDur), t.TextMuted.Alpha(statusMutedOpacity), nil, false)
 	}
 }
 
@@ -116,14 +102,6 @@ func statusItem(c *ui.Context, tip string, svg *ui.SVG, text string, color ui.Co
 		b.Background(buttonFill(t))
 	}
 	b.Children(content).OnClick(onClick)
-}
-
-// formatCompile 把编译耗时显示为「12 ms」或「1.3 s」。
-func formatCompile(d time.Duration) string {
-	if d < time.Second {
-		return fmt.Sprintf("%d ms", max(1, d.Milliseconds()))
-	}
-	return fmt.Sprintf("%.1f s", d.Seconds())
 }
 
 // thousands 给数字加千位分隔符。

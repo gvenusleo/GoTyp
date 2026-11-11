@@ -146,8 +146,11 @@ func (a *App) loadSession(id string) {
 			a.busy = false
 			switch {
 			case err != nil:
+				// 跳转只对这次打开有效，失败后不能留到以后手动打开同一篇笔记时才生效。
+				a.pendingJump = nil
 				a.err = "无法打开文件：" + err.Error()
 			case vw != nil:
+				a.pendingJump = nil
 				a.showViewer(vw)
 			default:
 				a.showSession(newSession(id, source, st))
@@ -169,6 +172,7 @@ func (a *App) showSession(s *session) {
 	a.revealInOutline(s.id)
 	a.syncWindow()
 	a.previewChanged(s)
+	a.applyPendingJump(s)
 	a.persistWorkspace()
 	a.refreshMenu()
 }

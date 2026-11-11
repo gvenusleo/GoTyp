@@ -66,7 +66,6 @@ func (a *App) filesChanged(v *vault.Vault, events []mygo.FileEvent) {
 		written = append(written, e.Path)
 	}
 	a.refreshTitles(written)
-	a.refreshTypstMirror(events)
 	if vw := a.viewing; vw != nil {
 		for _, e := range events {
 			if e.Path == vw.id || e.OldPath == vw.id || e.Op == mygo.FileHint || affects(e.Path, vw.id) {
@@ -170,40 +169,4 @@ func (a *App) checkCurrent() {
 			}
 		})
 	}()
-}
-
-// refreshTypstMirror 在主文件所在路径的目录中出现新增、删除或改名时重启常驻编译进程，让镜像看到新的文件。
-// 镜像中只有这一路是真实目录，其他目录和文件内容的变化经符号链接由 typst watch 自行发现，不需要重启。
-func (a *App) refreshTypstMirror(events []mygo.FileEvent) {
-	s := a.current
-	if s == nil || s.watch == nil {
-		return
-	}
-	for _, e := range events {
-		var dirs []string
-		switch e.Op {
-		case mygo.FileWrite:
-			continue
-		case mygo.FileHint:
-			// 提示只说明这个目录之下有变化。
-			dirs = []string{strings.TrimPrefix(e.Path, ".")}
-		default:
-			dirs = []string{parentDir(e.Path)}
-			if e.OldPath != "" {
-				dirs = append(dirs, parentDir(e.OldPath))
-			}
-		}
-		for _, dir := range dirs {
-			if onMirrorPath(dir, s.id) {
-				a.stopWatch(s)
-				return
-			}
-		}
-	}
-}
-
-// onMirrorPath 报告目录 dir 是否在从仓库根到 id 所在目录的路上，镜像中只有这些目录是真实目录。
-func onMirrorPath(dir, id string) bool {
-	parent := parentDir(id)
-	return dir == "" || dir == parent || strings.HasPrefix(parent, dir+"/")
 }

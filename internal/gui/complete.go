@@ -4,8 +4,10 @@ import (
 	"context"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
@@ -26,8 +28,41 @@ const (
 // startLSP 为仓库建立 tinymist 客户端。进程在第一次打开 Typst 笔记时才启动。
 func (a *App) startLSP(root string) {
 	a.stopLSP()
-	a.lsp = tinymist.New(a.ctx, root)
+	client := tinymist.New(a.ctx, root)
+	client.OnDiagnostics(func(path string, doc *tinymist.Document, diags []tinymist.Diagnostic) {
+		a.publish(func() { a.setDiagnostics(client, path, doc, diags) })
+	})
+	client.OnShowDocument(func(path string, at tinymist.Position) {
+		a.publish(func() { a.showDocument(client, path, at) })
+	})
+	a.lsp = client
 	a.lspQueue = &serialQueue{}
+}
+
+// setDiagnostics 记录一个文件的诊断。被引入的文件也会报告，诊断面板一并列出。
+func (a *App) setDiagnostics(client *tinymist.Client, path string, doc *tinymist.Document, diags []tinymist.Diagnostic) {
+	s := a.current
+	if a.lsp != client || s == nil || s.lspPath == "" {
+		return
+	}
+	// 文本版本变化后，相同的行列也要重新定位；通知携带的快照不会随排队期间的新编辑改变。
+	same := slices.Equal(a.diags[path], diags)
+	if path == s.lspPath && doc != nil && (!same || s.diagSnapshot != doc) {
+		a.showEditorDiagnostics(s, *doc, diags)
+		s.diagSnapshot = doc
+	}
+	if same {
+		return
+	}
+	if len(diags) == 0 {
+		delete(a.diags, path)
+	} else {
+		if a.diags == nil {
+			a.diags = map[string][]tinymist.Diagnostic{}
+		}
+		a.diags[path] = diags
+	}
+	a.diagReport = a.formatDiagnostics()
 }
 
 // stopLSP 排在已提交的打开和关闭之后结束进程。
@@ -71,7 +106,7 @@ func (q *serialQueue) drain() {
 	}
 }
 
-// attachLSP 让 Typst 笔记的编辑器向 tinymist 请求补全和悬停，并提前同步文档，让首次编译尽早开始。
+// attachLSP 让 Typst 笔记的编辑器向 tinymist 请求补全和悬停，并提前同步文档，让诊断和首次编译尽早开始。
 func (a *App) attachLSP(s *session) {
 	client := a.lsp
 	if client == nil || a.vault == nil || s.kind != vault.KindTypst {
@@ -81,7 +116,10 @@ func (a *App) attachLSP(s *session) {
 	s.lspPath = filepath.Join(a.vault.Root(), filepath.FromSlash(s.id))
 	s.ed.OnCompletion = func(r editor.CompletionRequest) { a.requestCompletion(s, r) }
 	s.ed.OnHover = func(r editor.HoverRequest) { a.requestHover(s, r) }
+	s.ed.OnDefinition = func(offset int) { a.requestDefinition(s, offset) }
+	s.ed.ContextMenu = a.typstContextMenu(s)
 	doc := s.lspDocument()
+	s.syncedVersion, s.syncDue = doc.Version, time.Time{}
 	a.lspQueue.run(func() { client.Open(doc) })
 }
 
@@ -91,7 +129,10 @@ func (a *App) detachLSP(s *session) {
 		return
 	}
 	s.cancelLSP()
-	s.ed.OnCompletion, s.ed.OnHover = nil, nil
+	s.ed.OnCompletion, s.ed.OnHover, s.ed.OnDefinition, s.ed.ContextMenu = nil, nil, nil, nil
+	s.ed.SetDiagnostics(s.ed.Buffer.Version(), nil)
+	s.diagSnapshot = nil
+	a.diags, a.diagReport = nil, diagReport{}
 	if client := a.lsp; client != nil {
 		path := s.lspPath
 		a.lspQueue.run(func() { client.CloseDoc(path) })

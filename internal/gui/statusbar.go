@@ -1,6 +1,9 @@
 package gui
 
 import (
+	"fmt"
+	"maps"
+	"path/filepath"
 	"slices"
 	"strings"
 	"unicode"
@@ -76,27 +79,37 @@ func selectionStats(s *session) (count, words int) {
 	return count, words
 }
 
-// diagnosticCounts 统计 Typst 短格式诊断中的错误和警告条数。
-func diagnosticCounts(text string) (errors, warnings int) {
-	for line := range strings.Lines(text) {
-		switch {
-		case strings.Contains(line, "error:"):
-			errors++
-		case strings.Contains(line, "warning:"):
-			warnings++
-		}
-	}
-	return errors, warnings
+// diagReport 是排好的诊断文本和计数。状态栏每帧都要显示，只在诊断变化时重排。
+type diagReport struct {
+	text             string
+	errors, warnings int
 }
 
-// typstDiagnostics 返回当前诊断：编译失败时是错误，成功时是警告。
-func typstDiagnostics(s *session) (text string, errors, warnings int) {
-	if s.previewErr != "" {
-		errors, warnings = diagnosticCounts(s.previewErr)
-		return s.previewErr, max(errors, 1), warnings
+// formatDiagnostics 把 tinymist 的诊断排成 Typst 短格式，路径相对仓库根，行列从 1 开始。
+// 列按 UTF-16 计，中文和 emoji 所在行可能与编辑器的列不同，只用于定位。
+func (a *App) formatDiagnostics() diagReport {
+	var r diagReport
+	var b strings.Builder
+	for _, name := range slices.Sorted(maps.Keys(a.diags)) {
+		shown := name
+		if a.vault != nil {
+			if rel, err := filepath.Rel(a.vault.Root(), name); err == nil {
+				shown = filepath.ToSlash(rel)
+			}
+		}
+		for _, d := range a.diags[name] {
+			kind := "warning"
+			if d.Error {
+				kind = "error"
+				r.errors++
+			} else {
+				r.warnings++
+			}
+			fmt.Fprintf(&b, "%s:%d:%d: %s: %s\n", shown, d.Start.Line+1, d.Start.Character+1, kind, d.Message)
+		}
 	}
-	_, warnings = diagnosticCounts(s.previewDiag)
-	return s.previewDiag, 0, warnings
+	r.text = strings.TrimSpace(b.String())
+	return r
 }
 
 // statusDiagnostics 展开或收起诊断面板，纯编辑模式下先切到分屏让面板可见。

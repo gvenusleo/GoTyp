@@ -101,7 +101,7 @@ func (a *App) moreMenu(m *ui.Menu) {
 		return
 	}
 	if s.kind == vault.KindTypst {
-		if m.Item("导出 PDF…").Shortcut(ui.Cmd, ui.KeyE).Disabled(s.exporting).Chosen() {
+		if m.Item("导出 PDF…").Shortcut(ui.Cmd, ui.KeyE).Disabled(a.busy).Chosen() {
 			a.exportPDFDialog()
 		}
 	}
