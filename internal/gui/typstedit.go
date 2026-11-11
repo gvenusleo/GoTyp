@@ -66,12 +66,11 @@ func (a *App) typstContextMenu(s *session) func(m *ui.Menu) {
 
 // showEditorDiagnostics 在编辑器中标出当前笔记的诊断。坐标按诊断对应的已同步文本换算，
 // 编辑器再按版本把它们移到之后的编辑上。
-func (a *App) showEditorDiagnostics(s *session) {
-	diags := a.diags[s.lspPath]
+func (a *App) showEditorDiagnostics(s *session, doc tinymist.Document, diags []tinymist.Diagnostic) {
 	list := make([]editor.Diagnostic, 0, len(diags))
 	for _, d := range diags {
-		start, ok := tinymist.Offset(s.syncedText, d.Start)
-		end, ok2 := tinymist.Offset(s.syncedText, d.End)
+		start, ok := tinymist.Offset(doc.Text, d.Start)
+		end, ok2 := tinymist.Offset(doc.Text, d.End)
 		if !ok || !ok2 || end < start {
 			continue
 		}
@@ -81,7 +80,7 @@ func (a *App) showEditorDiagnostics(s *session) {
 		}
 		list = append(list, editor.Diagnostic{Start: start, End: end, Severity: severity, Message: d.Message, Source: "typst"})
 	}
-	s.ed.SetDiagnostics(s.syncedVersion, list)
+	s.ed.SetDiagnostics(doc.Version, list)
 }
 
 // definitionAtCursor 供菜单使用，跳到光标处符号的定义。

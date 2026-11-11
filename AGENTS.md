@@ -29,7 +29,7 @@ GoTyp 是用 Go 和 MyGo Native UI 编写的本地笔记应用。唯一的产品
 ## GUI（MyGo Native UI）
 
 - 界面状态只在主线程读写。后台 goroutine 启动前取出所需快照和参数，不在后台读取 GUI 状态。
-- 文件 I/O、Typst 编译、图片解码和其他慢操作不得在 view 中执行。
+- 文件 I/O、Typst 编译、图片解码和其他慢操作在后台执行，不得在 view 中执行。唯一例外是用户触发的 PDF 导出：在主线程同步完成，期间暂停界面操作。
 - 后台结果通过 `Window.Update` 回到主线程，并按笔记 ID 和源版本核对；过期结果直接丢弃。
 - view 可以多次重建，不得在渲染过程中无条件启动保存、编译或其他副作用。
 - `editor.State`、列表状态和预览数据持久保存在应用状态中。不得保存 `ui.Element`、构建部件或 `*ui.Context`。

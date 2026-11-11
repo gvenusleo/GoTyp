@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/editor"
 
 	"gotyp/internal/tinymist"
 	"gotyp/internal/vault"
@@ -136,6 +137,48 @@ func TestFinishCompletionDropsStaleResult(t *testing.T) {
 	}
 }
 
+// 外部重载后，即使错误的行列和内容没变，也必须按新版本恢复诊断位置。
+func TestDiagnosticsRefreshAfterReload(t *testing.T) {
+	a := newApp()
+	t.Cleanup(a.cancel)
+	client := tinymist.New(a.ctx, t.TempDir())
+	t.Cleanup(client.Close)
+	a.lsp = client
+	s := newSession("a.typ", "#foo\nold", vault.FileStat{})
+	s.lspPath = "/v/a.typ"
+	a.current = s
+	diags := []tinymist.Diagnostic{{Start: tinymist.Position{Character: 1}, End: tinymist.Position{Character: 4}, Error: true, Message: "unknown variable: foo"}}
+	doc := s.lspDocument()
+	a.setDiagnostics(client, s.lspPath, &doc, diags)
+	s.ed.Buffer.Reset("#foo\nnew")
+	s.ed.Select(0, 0)
+	fresh := s.lspDocument()
+	a.setDiagnostics(client, s.lspPath, &fresh, diags)
+	if got := s.ed.Diagnostics(); len(got) != 1 || got[0].Start != 1 || got[0].End != 4 {
+		t.Fatalf("重载后诊断没有恢复：%+v", got)
+	}
+}
+
+// 补全先同步了新文本时，诊断不能用界面防抖同步前的旧快照换算。
+func TestDiagnosticsBeforeDebouncedSync(t *testing.T) {
+	a := newApp()
+	t.Cleanup(a.cancel)
+	client := tinymist.New(a.ctx, t.TempDir())
+	t.Cleanup(client.Close)
+	a.lsp = client
+	s := newSession("a.typ", "#foo\n", vault.FileStat{})
+	s.lspPath = "/v/a.typ"
+	a.current = s
+	s.syncedVersion = s.ed.Buffer.Version()
+	s.ed.Buffer.Edit(editor.Edit{Text: "\n"})
+	doc := s.lspDocument()
+	diags := []tinymist.Diagnostic{{Start: tinymist.Position{Line: 1, Character: 1}, End: tinymist.Position{Line: 1, Character: 4}, Error: true, Message: "unknown variable: foo"}}
+	a.setDiagnostics(client, s.lspPath, &doc, diags)
+	if got := s.ed.Diagnostics(); len(got) != 1 || got[0].Start != 2 || got[0].End != 5 {
+		t.Fatalf("提前同步后的诊断位置错误：%+v", got)
+	}
+}
+
 // 切换笔记清空诊断后，被引入文件报告的同一条错误必须重新显示，不能被当作重复丢掉；
 // 已显示的诊断再次到达时不重排。
 func TestDiagnosticsShownAgainAfterSwitch(t *testing.T) {
@@ -147,12 +190,12 @@ func TestDiagnosticsShownAgainAfterSwitch(t *testing.T) {
 	s.lspPath = "/v/a.typ"
 	a.current = s
 	lib := []tinymist.Diagnostic{{Error: true, Message: "unclosed delimiter"}}
-	a.setDiagnostics(client, "/v/lib.typ", lib)
+	a.setDiagnostics(client, "/v/lib.typ", nil, lib)
 	if a.diagReport.errors != 1 {
 		t.Fatalf("errors = %d，期望 1", a.diagReport.errors)
 	}
 	a.diags, a.diagReport = nil, diagReport{}
-	a.setDiagnostics(client, "/v/lib.typ", lib)
+	a.setDiagnostics(client, "/v/lib.typ", nil, lib)
 	if a.diagReport.errors != 1 {
 		t.Fatalf("切换后 errors = %d，期望 1", a.diagReport.errors)
 	}

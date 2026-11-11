@@ -28,9 +28,6 @@ func (a *App) statusBarView(c *ui.Context, s *session) {
 		if s.kind == vault.KindTypst {
 			a.compileStatus(c, s)
 		}
-		if s.exporting {
-			statusItem(c, "正在导出 PDF", nil, "正在导出 PDF", t.TextMuted, nil, true)
-		}
 		ui.Spacer(c)
 		if width >= statusPositionWidth {
 			a.positionStatus(c, s)

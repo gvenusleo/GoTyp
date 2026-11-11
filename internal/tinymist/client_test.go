@@ -223,12 +223,51 @@ func TestExportRefusesPathOutsideTempDir(t *testing.T) {
 	}
 }
 
+// 补全等请求提前同步的版本必须随诊断送达；已送达的快照不能被后续同步改写。
+func TestDiagnosticsCarrySyncedSnapshot(t *testing.T) {
+	cl, f := startFake(t)
+	got := make(chan *Document, 4)
+	cl.OnDiagnostics(func(_ string, doc *Document, _ []Diagnostic) { got <- doc })
+	doc := Document{Path: "/v/a.typ", Text: "#foo\n", Version: 1}
+	if err := cl.Open(doc); err != nil {
+		t.Fatal(err)
+	}
+	f.next(t, "textDocument/didOpen")
+	note := `{"uri":"file:///v/a.typ","diagnostics":[]}`
+	f.notify("textDocument/publishDiagnostics", note)
+	first := <-got
+	if first == nil || *first != doc {
+		t.Fatalf("初始诊断快照 = %+v，期望 %+v", first, doc)
+	}
+	fresh := Document{Path: doc.Path, Text: "\n#foo\n", Version: 2}
+	done := make(chan error, 1)
+	go func() {
+		_, err := cl.Complete(t.Context(), fresh, 0)
+		done <- err
+	}()
+	req := f.next(t, "textDocument/completion")
+	f.notify("textDocument/publishDiagnostics", note)
+	second := <-got
+	if second == nil || *second != fresh || *first != doc {
+		t.Fatalf("快照未更新或旧快照被改写：first=%+v，second=%+v", first, second)
+	}
+	f.reply(req.ID, `[]`)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	cl.CloseDoc(doc.Path)
+	f.notify("textDocument/publishDiagnostics", note)
+	if stale := <-got; stale != nil {
+		t.Fatalf("关闭文档后仍携带旧快照：%+v", stale)
+	}
+}
+
 // 相同的诊断重复到达时每次都交给调用方。是否与界面上的相同只有调用方知道：
 // 切换笔记清空界面后，被引入文件的同一条错误必须再次显示。
 func TestRepeatedDiagnosticsAreDelivered(t *testing.T) {
 	cl, f := startFake(t)
 	got := make(chan int, 4)
-	cl.OnDiagnostics(func(path string, diags []Diagnostic) { got <- len(diags) })
+	cl.OnDiagnostics(func(path string, doc *Document, diags []Diagnostic) { got <- len(diags) })
 	if err := cl.Open(Document{Path: "/v/a.typ", Text: "= A", Version: 1}); err != nil {
 		t.Fatal(err)
 	}

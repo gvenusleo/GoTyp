@@ -124,7 +124,7 @@ func (a *App) previewInverted() bool {
 func (a *App) syncLSP(s *session) {
 	client := a.lsp
 	doc := s.lspDocument()
-	s.syncedVersion, s.syncedText, s.syncDue = doc.Version, doc.Text, time.Time{}
+	s.syncedVersion, s.syncDue = doc.Version, time.Time{}
 	a.lspQueue.run(func() { client.Open(doc) })
 }
 
@@ -137,7 +137,7 @@ func (a *App) startPreview(s *session, invert bool) {
 	gen := s.previewGen
 	s.previewStarting, s.previewInvert = true, invert
 	doc := s.lspDocument()
-	s.syncedVersion, s.syncedText, s.syncDue = doc.Version, doc.Text, time.Time{}
+	s.syncedVersion, s.syncDue = doc.Version, time.Time{}
 	a.lspQueue.run(func() {
 		ctx, cancel := context.WithTimeout(a.ctx, previewTimeout)
 		p, err := client.StartPreview(ctx, doc, id, invert)

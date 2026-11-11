@@ -12,6 +12,7 @@ import (
 	"github.com/egoist/mygo/ui/editor"
 	"github.com/egoist/mygo/ui/markdown"
 
+	"gotyp/internal/tinymist"
 	"gotyp/internal/vault"
 )
 
@@ -46,13 +47,11 @@ type session struct {
 	sourceVersion uint64
 	md            markdown.Options
 
-	exporting bool
-
 	// Typst 预览任务的状态，见 typstpreview.go。
-	syncedVersion   uint64    // 已交给 tinymist 的 buffer 版本
-	syncedText      string    // 该版本的文本，诊断的坐标按它换算
-	syncDue         time.Time // 编辑停顿后同步的时刻，零值表示还没安排
-	previewGen      uint64    // 启动或结束任务时加一，过期的启动结果据此丢弃
+	syncedVersion   uint64             // 已交给同步队列的 buffer 版本
+	diagSnapshot    *tinymist.Document // 上次编辑器诊断使用的只读快照
+	syncDue         time.Time          // 编辑停顿后同步的时刻，零值表示还没安排
+	previewGen      uint64             // 启动或结束任务时加一，过期的启动结果据此丢弃
 	previewTask     string
 	previewURL      string
 	previewStop     chan struct{} // 关闭后不再等待任务所在进程退出

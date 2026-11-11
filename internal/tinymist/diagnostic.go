@@ -15,8 +15,9 @@ type Diagnostic struct {
 }
 
 // OnDiagnostics 设置诊断的接收者：path 是绝对路径，diags 是这个文件当前的全部诊断，为空表示已清除。
+// doc 是通知到达时已同步的只读快照，未打开的依赖文件为 nil；服务端不带版本号，仍可能发来旧编译的诊断。
 // fn 在后台 goroutine 中按服务端发送的顺序调用。必须在第一次使用客户端之前设置。
-func (cl *Client) OnDiagnostics(fn func(path string, diags []Diagnostic)) {
+func (cl *Client) OnDiagnostics(fn func(path string, doc *Document, diags []Diagnostic)) {
 	cl.onDiag = fn
 }
 
@@ -26,10 +27,10 @@ func (cl *Client) OnShowDocument(fn func(path string, at Position)) {
 	cl.onShow = fn
 }
 
-func (cl *Client) notification(method string, params json.RawMessage) {
+func (cl *Client) notification(c *conn, method string, params json.RawMessage) {
 	switch method {
 	case "textDocument/publishDiagnostics":
-		cl.diagnostics(params)
+		cl.diagnostics(c, params)
 	case "window/showDocument":
 		var p struct {
 			URI       string    `json:"uri"`
@@ -48,7 +49,7 @@ func (cl *Client) notification(method string, params json.RawMessage) {
 	}
 }
 
-func (cl *Client) diagnostics(params json.RawMessage) {
+func (cl *Client) diagnostics(c *conn, params json.RawMessage) {
 	if cl.onDiag == nil {
 		return
 	}
@@ -83,7 +84,13 @@ func (cl *Client) diagnostics(params json.RawMessage) {
 	}
 	// tinymist 每次编译都会重发诊断。是否与上次相同由调用方判断：只有它知道界面何时清空过，
 	// 在这里去重会在切换笔记后吞掉被引入文件的诊断。
-	cl.onDiag(path, diags)
+	var doc *Document
+	if value, ok := cl.docs.Load(path); ok {
+		if st := value.(*docState); st.conn == c {
+			doc = &st.doc
+		}
+	}
+	cl.onDiag(path, doc, diags)
 }
 
 // uriPath 把 file URI 换回绝对路径，与 fileURI 相反。

@@ -29,8 +29,8 @@ const (
 func (a *App) startLSP(root string) {
 	a.stopLSP()
 	client := tinymist.New(a.ctx, root)
-	client.OnDiagnostics(func(path string, diags []tinymist.Diagnostic) {
-		a.publish(func() { a.setDiagnostics(client, path, diags) })
+	client.OnDiagnostics(func(path string, doc *tinymist.Document, diags []tinymist.Diagnostic) {
+		a.publish(func() { a.setDiagnostics(client, path, doc, diags) })
 	})
 	client.OnShowDocument(func(path string, at tinymist.Position) {
 		a.publish(func() { a.showDocument(client, path, at) })
@@ -40,13 +40,18 @@ func (a *App) startLSP(root string) {
 }
 
 // setDiagnostics 记录一个文件的诊断。被引入的文件也会报告，诊断面板一并列出。
-func (a *App) setDiagnostics(client *tinymist.Client, path string, diags []tinymist.Diagnostic) {
-	if a.lsp != client || a.current == nil || a.current.lspPath == "" {
+func (a *App) setDiagnostics(client *tinymist.Client, path string, doc *tinymist.Document, diags []tinymist.Diagnostic) {
+	s := a.current
+	if a.lsp != client || s == nil || s.lspPath == "" {
 		return
 	}
-	// tinymist 每次编译都重发诊断，与已显示的相同时不重排、不惊动编辑器。切换笔记时 a.diags 已清空，
-	// 所以新笔记收到的诊断即使与上一篇的相同也会显示。
-	if old, known := a.diags[path]; slices.Equal(old, diags) && (known || len(diags) == 0) {
+	// 文本版本变化后，相同的行列也要重新定位；通知携带的快照不会随排队期间的新编辑改变。
+	same := slices.Equal(a.diags[path], diags)
+	if path == s.lspPath && doc != nil && (!same || s.diagSnapshot != doc) {
+		a.showEditorDiagnostics(s, *doc, diags)
+		s.diagSnapshot = doc
+	}
+	if same {
 		return
 	}
 	if len(diags) == 0 {
@@ -58,9 +63,6 @@ func (a *App) setDiagnostics(client *tinymist.Client, path string, diags []tinym
 		a.diags[path] = diags
 	}
 	a.diagReport = a.formatDiagnostics()
-	if path == a.current.lspPath {
-		a.showEditorDiagnostics(a.current)
-	}
 }
 
 // stopLSP 排在已提交的打开和关闭之后结束进程。
@@ -117,7 +119,7 @@ func (a *App) attachLSP(s *session) {
 	s.ed.OnDefinition = func(offset int) { a.requestDefinition(s, offset) }
 	s.ed.ContextMenu = a.typstContextMenu(s)
 	doc := s.lspDocument()
-	s.syncedVersion, s.syncedText, s.syncDue = doc.Version, doc.Text, time.Time{}
+	s.syncedVersion, s.syncDue = doc.Version, time.Time{}
 	a.lspQueue.run(func() { client.Open(doc) })
 }
 
@@ -129,6 +131,7 @@ func (a *App) detachLSP(s *session) {
 	s.cancelLSP()
 	s.ed.OnCompletion, s.ed.OnHover, s.ed.OnDefinition, s.ed.ContextMenu = nil, nil, nil, nil
 	s.ed.SetDiagnostics(s.ed.Buffer.Version(), nil)
+	s.diagSnapshot = nil
 	a.diags, a.diagReport = nil, diagReport{}
 	if client := a.lsp; client != nil {
 		path := s.lspPath

@@ -43,8 +43,7 @@ func (a *App) exportPDFDialog() {
 		a.notify("tinymist 不可用，无法导出 PDF")
 		return
 	}
-	if s.exporting {
-		a.notify("正在导出 PDF")
+	if a.busy {
 		return
 	}
 	name, err := mygo.Dialog.Save(mygo.SaveDialogOptions{
@@ -56,29 +55,30 @@ func (a *App) exportPDFDialog() {
 	if err != nil || name == "" {
 		return
 	}
-	client := a.lsp
-	doc := s.lspDocument()
-	s.exporting = true
-	// 导出按当前快照另行编译，不暂停预览。
-	go func() {
-		ctx, cancel := context.WithTimeout(a.ctx, exportTimeout)
-		defer cancel()
-		data, err := client.ExportPDF(ctx, doc)
-		if errors.Is(err, context.DeadlineExceeded) {
-			err = errors.New("编译超时")
-		}
-		if err == nil {
-			err = vault.WriteCopy(name, bytes.NewReader(data))
-		}
-		a.publish(func() {
-			s.exporting = false
-			if err != nil {
-				a.notify("PDF 导出失败：" + err.Error())
-			} else {
-				a.notify("PDF 已导出")
-			}
-		})
-	}()
+	// 主线程等待导出完成，期间不能编辑或切换笔记，快照不会跨会话排队。
+	ctx, cancel := context.WithTimeout(a.ctx, exportTimeout)
+	defer cancel()
+	// 先等此前的打开、关闭和文本同步完成，避免刚切换笔记就导出时撞上旧会话。
+	ready := make(chan struct{})
+	a.lspQueue.run(func() { close(ready) })
+	select {
+	case <-ready:
+	case <-ctx.Done():
+		a.notify("PDF 导出失败：编译超时")
+		return
+	}
+	data, err := a.lsp.ExportPDF(ctx, s.lspDocument())
+	if errors.Is(err, context.DeadlineExceeded) {
+		err = errors.New("编译超时")
+	}
+	if err == nil {
+		err = vault.WriteCopy(name, bytes.NewReader(data))
+	}
+	if err != nil {
+		a.notify("PDF 导出失败：" + err.Error())
+	} else {
+		a.notify("PDF 已导出")
+	}
 }
 
 func (a *App) openMarkdownLink(s *session, dest string) {

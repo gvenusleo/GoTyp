@@ -4,6 +4,7 @@ package tinymist
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/url"
 	"os"
@@ -34,10 +35,10 @@ type Document struct {
 	Version uint64
 }
 
-// docState 是一篇已打开文档的同步状态：version 是 GoTyp 的 buffer 版本，lspVersion 是发给服务端的递增版本号。
+// docState 是一篇已打开文档的不可变同步状态；lspVersion 是发给服务端的递增版本号。
 type docState struct {
 	conn       *conn
-	version    uint64
+	doc        Document
 	lspVersion int
 }
 
@@ -47,14 +48,15 @@ type Client struct {
 	cancel context.CancelFunc
 	root   string
 	launch func(ctx context.Context, root, outDir string) (*conn, error)
-	onDiag func(path string, diags []Diagnostic)
+	onDiag func(path string, doc *Document, diags []Diagnostic)
 	onShow func(path string, at Position)
 
 	mu       sync.Mutex
 	conn     *conn
 	starts   int
 	disabled bool
-	docs     map[string]*docState
+	// 诊断接收不能等待发送时持有的 mu，否则大文档可能堵住 stdio 管道的两端。
+	docs sync.Map // string -> *docState，只替换，不改动已存入的快照
 	// outDir 是 tinymist 导出文件的临时目录，第一次启动进程时创建，Close 时删除。
 	outDir   string
 	exportMu sync.Mutex
@@ -63,7 +65,7 @@ type Client struct {
 // New 返回仓库 root 的客户端，不启动进程。ctx 结束时进程随之结束。
 func New(ctx context.Context, root string) *Client {
 	ctx, cancel := context.WithCancel(ctx)
-	return &Client{ctx: ctx, cancel: cancel, root: root, launch: launch, docs: map[string]*docState{}}
+	return &Client{ctx: ctx, cancel: cancel, root: root, launch: launch}
 }
 
 // launch 启动 tinymist 并完成初始化握手。tinymist 在标准输入关闭时退出，
@@ -158,7 +160,7 @@ func (cl *Client) connect() (*conn, error) {
 		return nil, err
 	}
 	// 诊断在 didOpen 之后才会到达，这时接收者已经就位。
-	c.handleNotes(cl.notification)
+	c.handleNotes(func(method string, params json.RawMessage) { cl.notification(c, method, params) })
 	cl.conn = c
 	return c, nil
 }
@@ -211,31 +213,33 @@ func (cl *Client) syncLocked(doc Document) (*conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	st := cl.docs[doc.Path]
+	value, _ := cl.docs.Load(doc.Path)
+	st, _ := value.(*docState)
 	uri := fileURI(doc.Path)
 	switch {
 	case st == nil || st.conn != c:
-		st = &docState{conn: c, version: doc.Version, lspVersion: 1}
+		st = &docState{conn: c, doc: doc, lspVersion: 1}
+		cl.docs.Store(doc.Path, st)
 		err = c.notify("textDocument/didOpen", map[string]any{"textDocument": map[string]any{
 			"uri": uri, "languageId": "typst", "version": st.lspVersion, "text": doc.Text,
 		}})
 		if err == nil {
 			err = focus(c, doc.Path)
 		}
-	case doc.Version < st.version:
+	case doc.Version < st.doc.Version:
 		return nil, errStale
-	case st.version != doc.Version:
-		st.version = doc.Version
-		st.lspVersion++
+	case st.doc.Version != doc.Version:
+		st = &docState{conn: c, doc: doc, lspVersion: st.lspVersion + 1}
+		cl.docs.Store(doc.Path, st)
 		err = c.notify("textDocument/didChange", map[string]any{
 			"textDocument":   map[string]any{"uri": uri, "version": st.lspVersion},
 			"contentChanges": []any{map[string]any{"text": doc.Text}},
 		})
 	}
 	if err != nil {
+		cl.docs.Delete(doc.Path)
 		return nil, err
 	}
-	cl.docs[doc.Path] = st
 	return c, nil
 }
 
@@ -260,8 +264,8 @@ func focus(c *conn, path string) error {
 func (cl *Client) CloseDoc(path string) {
 	cl.mu.Lock()
 	defer cl.mu.Unlock()
-	st := cl.docs[path]
-	delete(cl.docs, path)
+	value, _ := cl.docs.LoadAndDelete(path)
+	st, _ := value.(*docState)
 	if st == nil || st.conn.closed() {
 		return
 	}
