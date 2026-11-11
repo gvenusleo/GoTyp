@@ -123,6 +123,7 @@ Vault 是普通文件夹，GoTyp 不向其中写入任何自己的文件。应�
 预览、诊断、编辑辅助和 PDF 导出都由 tinymist 提供。tinymist 缺失或停用时，Typst 笔记仍可编辑和保存，只是没有这些能力；预览区显示错误。
 
 - 进程：每个仓库最多一个 `tinymist lsp`，首次打开 Typst 笔记时启动，`rootUri` 为 Vault；`exportPdf` 设为 `never`，`outputPath` 指向 GoTyp 的临时目录，`formatterMode` 设为 `typstyle`，关闭未使用的能力；服务端请求都要回应，`window/showDocument` 交给滚动同步处理，其余回应空结果。意外退出后重启一次，再失败就停用到下次打开仓库
+- 空闲：tinymist 把用到的字体整份读入内存，并缓存解码后的图片，一篇中文笔记就能让进程常驻数百 MB。连续 5 分钟没有打开 Typst 笔记时，按 LSP 约定结束进程，下次打开 Typst 笔记再启动。这种主动结束不算意外退出，重启次数重新计算
 - 同步：打开笔记时 `didOpen`，随后执行 `tinymist.focusMain` 把主文件切到这篇笔记，否则 tinymist 只跟随第一次打开的文档，之后的笔记收不到诊断；切走或删除时 `didClose`。编辑停止 150 毫秒后发送全量 `didChange`，补全或悬停前若 buffer 版本更新也先发送；这些通知在同一后台队列按序执行，比已发版本旧的快照直接放弃。tinymist 只读内存中的 buffer，不需要先保存或写临时文件
 - 坐标：tinymist 使用 UTF-16 行列，编辑器使用 UTF-8 字节偏移，换算在 `internal/tinymist` 中基于对应版本的快照完成；越界或落在字符中间时丢弃整次结果
 
@@ -132,7 +133,7 @@ Vault 是普通文件夹，GoTyp 不向其中写入任何自己的文件。应�
 
 - 任务：Typst 笔记首次显示预览时，执行 `tinymist.doStartPreview`，参数为 `--task-id`、`--data-plane-host 127.0.0.1:0`、`--not-primary`、`--no-open` 和主文件路径；`--not-primary` 让每个任务用独立的编译实例，否则主实例的预览会把主文件钉住，结束任务后也不解除，之后切换的笔记会退回磁盘内容并失去诊断；返回的 `staticServerPort` 拼成 `http://127.0.0.1:<端口>/` 交给 WebView 加载。切换笔记、关闭仓库、退出或调色状态变化时用 `tinymist.doKillPreview` 结束旧任务
 - 核对：启动结果回到主线程时，笔记 ID 和任务代次都匹配才加载；不匹配说明期间已切换笔记，直接结束这个任务
-- WebView：每个窗口一个，由 `Window.NewWebView` 创建并保存在应用状态中，view 只用 `ui.WebView` 放置；不显示预览时不构建该元素，页面保留。背景色取主题的预览画布色，避免加载前闪白。不给预览页绑定 Go 方法；离开预览服务地址的导航一律取消，`http`、`https`、`mailto` 链接交给系统打开
+- WebView：每个窗口一个，由 `Window.NewWebView` 创建并保存在应用状态中，view 只用 `ui.WebView` 放置；不显示预览时不构建该元素，页面保留。释放也没有用：macOS 上 WebView 的内容进程在应用退出前不归还内存，实测跳到空白页、销毁 WebView 或结束预览任务后，占用基本不变。背景色取主题的预览画布色，避免加载前闪白。不给预览页绑定 Go 方法；离开预览服务地址的导航一律取消，`http`、`https`、`mailto` 链接交给系统打开
 - 编译：预览页随 `didChange` 增量刷新，编译失败时保留上一次成功的渲染。诊断来自 `textDocument/publishDiagnostics`，预览实例与主实例对同一处的重复报告合并为一条；状态栏显示错误和警告计数，诊断面板逐条列出
 - 缩放：使用预览页自带的交互，GoTyp 不提供缩放菜单和快捷键
 - 编辑器到预览：光标所在行变化并停留 300 毫秒后，执行 `tinymist.scrollPreview`，事件为 `panelScrollTo`，把预览滚到对应位置；多处选区或预览不可见时不发送

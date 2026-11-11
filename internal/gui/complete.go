@@ -23,6 +23,9 @@ const (
 	detailLimit = 48
 	// docLimit 是补全文档摘要的最大字符数，约三行，避免挤掉条目列表。
 	docLimit = 160
+	// lspIdle 是没有打开 Typst 笔记多久后结束 tinymist。它常驻数百 MB，
+	// 重新启动只要几秒，短暂切到别的笔记再回来时不必重启。
+	lspIdle = 5 * time.Minute
 )
 
 // startLSP 为仓库建立 tinymist 客户端。进程在第一次打开 Typst 笔记时才启动。
@@ -120,6 +123,7 @@ func (a *App) attachLSP(s *session) {
 	s.ed.ContextMenu = a.typstContextMenu(s)
 	doc := s.lspDocument()
 	s.syncedVersion, s.syncDue = doc.Version, time.Time{}
+	a.lspIdleGen++
 	a.lspQueue.run(func() { client.Open(doc) })
 }
 
@@ -136,8 +140,22 @@ func (a *App) detachLSP(s *session) {
 	if client := a.lsp; client != nil {
 		path := s.lspPath
 		a.lspQueue.run(func() { client.CloseDoc(path) })
+		a.scheduleLSPSuspend(client)
 	}
 	s.lspPath = ""
+}
+
+// scheduleLSPSuspend 在离开 Typst 笔记后安排结束 tinymist；期间打开了 Typst 笔记则作废。
+func (a *App) scheduleLSPSuspend(client *tinymist.Client) {
+	a.lspIdleGen++
+	gen := a.lspIdleGen
+	time.AfterFunc(lspIdle, func() {
+		a.publish(func() {
+			if a.lsp == client && a.lspIdleGen == gen && (a.current == nil || a.current.lspPath == "") {
+				a.lspQueue.run(client.Suspend)
+			}
+		})
+	})
 }
 
 func (s *session) lspDocument() tinymist.Document {

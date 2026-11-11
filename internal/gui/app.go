@@ -41,6 +41,8 @@ type App struct {
 	// lsp 是当前仓库的 tinymist 客户端，lspQueue 按顺序发送它的打开和关闭，见 complete.go。
 	lsp      *tinymist.Client
 	lspQueue *serialQueue
+	// lspIdleGen 在打开或离开 Typst 笔记时递增，让已经安排的空闲结束失效。
+	lspIdleGen uint64
 	// diags 是 tinymist 报告的诊断，按文件绝对路径存放，切换笔记时清空；diagReport 是排好的文本和计数。
 	diags      map[string][]tinymist.Diagnostic
 	diagReport diagReport
