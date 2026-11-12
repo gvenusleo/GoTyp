@@ -38,6 +38,11 @@ func (a *App) startLSP(root string) {
 	client.OnShowDocument(func(path string, at tinymist.Position) {
 		a.publish(func() { a.showDocument(client, path, at) })
 	})
+	if a.preview != nil {
+		client.OnPreview(func(doc tinymist.Document, data []byte, err error) {
+			a.publish(func() { a.receivePDF(client, doc, data, err) })
+		})
+	}
 	a.lsp = client
 	a.lspQueue = &serialQueue{}
 }
@@ -121,10 +126,11 @@ func (a *App) attachLSP(s *session) {
 	s.ed.OnHover = func(r editor.HoverRequest) { a.requestHover(s, r) }
 	s.ed.OnDefinition = func(offset int) { a.requestDefinition(s, offset) }
 	s.ed.ContextMenu = a.typstContextMenu(s)
-	doc := s.lspDocument()
-	s.syncedVersion, s.syncDue = doc.Version, time.Time{}
+	a.lspSeq++
+	s.lspID = a.lspSeq
+	s.lspContext, s.lspCancel = context.WithCancel(a.ctx)
 	a.lspIdleGen++
-	a.lspQueue.run(func() { client.Open(doc) })
+	a.syncLSP(s)
 }
 
 // detachLSP 在笔记不再显示时取消它的请求，并通知 tinymist 关闭文档。
@@ -159,16 +165,16 @@ func (a *App) scheduleLSPSuspend(client *tinymist.Client) {
 }
 
 func (s *session) lspDocument() tinymist.Document {
-	return tinymist.Document{Path: s.lspPath, Text: s.text(), Version: s.ed.Buffer.Version()}
+	return tinymist.Document{Path: s.lspPath, Text: s.text(), Version: s.ed.Buffer.Version(), Session: s.lspID}
 }
 
 func (s *session) cancelLSP() {
-	for _, cancel := range []context.CancelFunc{s.completeCancel, s.hoverCancel} {
+	for _, cancel := range []context.CancelFunc{s.completeCancel, s.hoverCancel, s.lspCancel} {
 		if cancel != nil {
 			cancel()
 		}
 	}
-	s.completeCancel, s.hoverCancel = nil, nil
+	s.completeCancel, s.hoverCancel, s.lspCancel = nil, nil, nil
 }
 
 func (a *App) requestCompletion(s *session, r editor.CompletionRequest) {
@@ -183,7 +189,7 @@ func (a *App) requestCompletion(s *session, r editor.CompletionRequest) {
 	if s.completeCancel != nil {
 		s.completeCancel()
 	}
-	ctx, cancel := context.WithCancel(a.ctx)
+	ctx, cancel := context.WithCancel(s.lspContext)
 	s.completeCancel = cancel
 	doc := s.lspDocument()
 	start := r.Offset - len(r.Prefix)
@@ -215,7 +221,7 @@ func (a *App) requestHover(s *session, r editor.HoverRequest) {
 	if s.hoverCancel != nil {
 		s.hoverCancel()
 	}
-	ctx, cancel := context.WithCancel(a.ctx)
+	ctx, cancel := context.WithCancel(s.lspContext)
 	s.hoverCancel = cancel
 	doc := s.lspDocument()
 	go func() {

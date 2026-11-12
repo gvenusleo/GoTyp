@@ -27,13 +27,13 @@ func (a *App) markdownPreviewView(c *ui.Context, s *session) {
 	})
 }
 
-// typstPreviewView 显示 tinymist 的预览页。WebView 只在有预览任务时构建，其余时候它连同页面一起隐藏。
+// typstPreviewView 显示原生 PDF 视图；尚未成功编译时显示加载或错误状态。
 func (a *App) typstPreviewView(c *ui.Context, s *session) {
 	t := c.Theme()
 	ui.Column(c).Grow(1).MinWidth(0).Background(t.Surface).Label("Typst 预览").Children(func() {
 		a.diagnosticsView(c, s)
-		if s.previewURL != "" && a.preview != nil {
-			ui.WebView(c, a.preview.web).Grow(1)
+		if s.previewReady && a.preview != nil {
+			ui.NativeView(c, a.preview).Grow(1)
 			return
 		}
 		a.typstEmptyView(c, s)
@@ -70,7 +70,7 @@ func (a *App) typstEmptyView(c *ui.Context, s *session) {
 	ui.Column(c).Grow(1).Center().Padding(emptyInset).Children(func() {
 		switch {
 		case a.preview == nil:
-			ui.Text(c, "无法创建预览视图").TextColor(t.TextMuted)
+			ui.Text(c, a.previewError).TextColor(t.TextMuted)
 		case s.previewErr != "":
 			ui.Text(c, s.previewErr).TextColor(t.TextMuted).Selectable()
 		case s.previewStarting:
