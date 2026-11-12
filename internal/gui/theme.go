@@ -1,8 +1,6 @@
 package gui
 
 import (
-	"fmt"
-
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -117,10 +115,10 @@ func (a *App) applyTheme(c *ui.Context) {
 			base: base, appearance: ap, app: app, sidebar: sidebarTheme(*app),
 			code: code, md: md, preview: previewTheme(app, md),
 		}
-		// 预览页加载前露出的是 WebView 的底色，跟随主题避免切换笔记时闪白。只在主题变化时设置一次。
+		// PDF 画布跟随主题，页面保留文档原色。
 		if a.preview != nil {
 			s := app.Surface
-			a.preview.web.SetBackgroundColor(fmt.Sprintf("#%02x%02x%02x", s.R, s.G, s.B))
+			a.preview.SetBackground(float64(s.R)/255, float64(s.G)/255, float64(s.B)/255)
 		}
 	}
 	c.SetTheme(a.themes.app)

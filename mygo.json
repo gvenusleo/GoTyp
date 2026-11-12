@@ -3,5 +3,11 @@
   "identifier": "xin.liuyu.gotyp",
   "version": "0.0.1",
   "main": "./cmd/gotyp",
-  "out": "build"
+  "out": "build",
+  "macos": {
+    "infoPlist": {
+      "CFBundleDevelopmentRegion": "zh-Hans",
+      "CFBundleLocalizations": ["zh-Hans"]
+    }
+  }
 }

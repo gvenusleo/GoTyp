@@ -56,25 +56,25 @@ func TestFinishSaveKeepsNewerEditDirty(t *testing.T) {
 	}
 }
 
-// 启动期间切换了笔记，迟到的预览任务不能加载到新笔记上，进行中的新启动也不能被它结束。
-func TestFinishPreviewDropsStaleTask(t *testing.T) {
+// 编辑、切换或重新打开同一路径后，旧 PDF 结果不能改动新会话的预览状态。
+func TestPreviewDropsStaleSnapshots(t *testing.T) {
 	a := newApp()
+	t.Cleanup(a.cancel)
 	a.lsp = tinymist.New(a.ctx, t.TempDir())
 	t.Cleanup(a.lsp.Close)
 	s := newSession("note.typ", "= Title", vault.FileStat{})
+	s.lspPath, s.lspID, s.previewStarting = "/v/note.typ", 1, true
 	a.current = s
-	s.previewGen, s.previewStarting = 2, true
-	p := tinymist.Preview{ID: "gotyp-1", URL: "http://127.0.0.1:1/"}
-	if a.finishPreview(s, a.lsp, 1, p, nil) {
-		t.Fatal("过期的预览任务被加载")
+	doc := s.lspDocument()
+	s.ed.Buffer.Set("= Changed")
+	if a.receivePDF(a.lsp, doc, nil, tinymist.ErrCompile) || !s.previewStarting || s.previewErr != "" {
+		t.Fatal("旧版本改动了当前预览状态")
 	}
-	if s.previewURL != "" || s.previewTask != "" || !s.previewStarting {
-		t.Fatalf("过期结果改动了预览状态：%+v", s)
-	}
-	other := newSession("other.typ", "", vault.FileStat{})
+	other := newSession("note.typ", "= Title", vault.FileStat{})
+	other.lspPath, other.lspID, other.previewStarting = doc.Path, 2, true
 	a.current = other
-	if a.finishPreview(s, a.lsp, 2, p, nil) {
-		t.Fatal("已切走的笔记加载了预览")
+	if a.receivePDF(a.lsp, doc, nil, tinymist.ErrCompile) || !other.previewStarting || other.previewErr != "" {
+		t.Fatal("旧会话改动了重新打开的笔记")
 	}
 }
 

@@ -31,8 +31,14 @@ description = "go vet 与 mygo vet 静态检查"
 run = "go vet ./... && go tool mygo vet ."
 
 [tasks.test]
-description = "运行测试"
-run = "go test ./... -count=1 -race"
+description = "运行 Go 竞态测试与 macOS 原生模块测试"
+run = '''
+set -e
+go test ./... -count=1 -race
+if [ "$(uname -s)" = "Darwin" ]; then
+  swift test --package-path internal/pdfpreview/swift
+fi
+'''
 
 [tasks.test-nocgo]
 description = "验证无 cgo 构建与测试"

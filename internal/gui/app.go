@@ -10,6 +10,7 @@ import (
 	_ "github.com/egoist/mygo/locales/zh-Hans"
 	"github.com/egoist/mygo/ui"
 
+	"gotyp/internal/pdfpreview"
 	"gotyp/internal/tinymist"
 	"gotyp/internal/vault"
 )
@@ -46,9 +47,10 @@ type App struct {
 	// diags 是 tinymist 报告的诊断，按文件绝对路径存放，切换笔记时清空；diagReport 是排好的文本和计数。
 	diags      map[string][]tinymist.Diagnostic
 	diagReport diagReport
-	// preview 是 Typst 预览区的 WebView，创建失败时为空；previewSeq 为预览任务编号。
-	preview    *previewPage
-	previewSeq uint64
+	// preview 随窗口创建，切换笔记只替换 PDF 文档。
+	preview      pdfpreview.Viewer
+	previewError string
+	lspSeq       uint64
 	// pendingJump 是打开另一篇笔记后要移动到的位置，见 typstedit.go。
 	pendingJump  *noteJump
 	symbolRename symbolRenameState
@@ -122,8 +124,19 @@ func Run() error {
 			Content:              ui.View(a.view),
 		})
 		a.win.OnClose(a.beforeClose)
-		// 预览 WebView 随窗口创建一次，切换笔记只换地址。创建失败时预览区显示错误，其余功能照常。
-		a.preview, _ = newPreviewPage(a.win)
+		a.win.OnClosed(func() {
+			a.stopPreview(a.current)
+			a.cancel()
+			a.stopLSP()
+			if a.preview != nil {
+				a.preview.Close()
+			}
+		})
+		var err error
+		a.preview, err = pdfpreview.NewViewer()
+		if err != nil {
+			a.previewError = "无法创建 PDF 预览：" + err.Error()
+		}
 		if len(a.state.Recent) > 0 {
 			a.startOpenVault(a.state.Recent[0])
 		}
@@ -218,7 +231,7 @@ func (a *App) setMode(mode int) {
 	a.modeChanged()
 }
 
-// modeChanged 切到编辑模式时保留预览任务，切回预览时无需重新启动。
+// modeChanged 切到编辑模式时保留 PDF，切回预览时继续阅读。
 func (a *App) modeChanged() {
 	a.persistWorkspace()
 	a.refreshMenu()
@@ -251,10 +264,18 @@ func (a *App) toggleSidebar() {
 }
 
 func (a *App) publish(fn func()) {
+	if a.ctx.Err() != nil {
+		return
+	}
+	apply := func() {
+		if a.ctx.Err() == nil {
+			fn()
+		}
+	}
 	if a.publishFn != nil {
-		a.publishFn(fn)
+		a.publishFn(apply)
 	} else if a.win != nil {
-		a.win.Update(fn)
+		a.win.Update(apply)
 	}
 }
 

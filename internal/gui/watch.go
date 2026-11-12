@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -75,6 +76,15 @@ func (a *App) filesChanged(v *vault.Vault, events []mygo.FileEvent) {
 		}
 	}
 	if s := a.current; s != nil {
+		for _, e := range events {
+			if s.lspPath != "" && e.Path != s.id {
+				s.previewFiles = append(s.previewFiles, filepath.Join(v.Root(), filepath.FromSlash(e.Path)))
+				if e.OldPath != "" {
+					s.previewFiles = append(s.previewFiles, filepath.Join(v.Root(), filepath.FromSlash(e.OldPath)))
+				}
+				s.syncDue = time.Time{}
+			}
+		}
 		for _, e := range events {
 			if e.Path == s.id || e.OldPath == s.id || e.Op == mygo.FileHint || affects(e.Path, s.id) {
 				a.checkCurrent()

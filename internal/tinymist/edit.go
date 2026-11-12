@@ -195,25 +195,3 @@ func collectHeadings(text string, symbols []documentSymbol, level int, out *[]He
 		collectHeadings(text, s.Children, level+1, out)
 	}
 }
-
-// ScrollPreview 让预览任务 id 滚到 doc 中 offset 对应的位置。只发出请求，不等结果。
-func (cl *Client) ScrollPreview(id string, doc Document, offset int) {
-	pos, err := toPosition(doc.Text, offset)
-	if err != nil {
-		return
-	}
-	cl.mu.Lock()
-	c := cl.conn
-	cl.mu.Unlock()
-	if c == nil || c.closed() {
-		return
-	}
-	ctx, cancel := context.WithTimeout(cl.ctx, shutdownTimeout)
-	defer cancel()
-	c.call(ctx, "workspace/executeCommand", map[string]any{
-		"command": "tinymist.scrollPreview",
-		"arguments": []any{id, map[string]any{
-			"event": "panelScrollTo", "filepath": doc.Path, "line": pos.Line, "character": pos.Character,
-		}},
-	}, nil)
-}
