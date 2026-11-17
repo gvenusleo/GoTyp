@@ -61,6 +61,16 @@ func (f *fakeServer) serve() {
 			f.reply(m.ID, `{"capabilities":{}}`)
 			continue
 		}
+		if m.Method == "shutdown" {
+			f.reply(m.ID, "null")
+			continue
+		}
+		if m.Method == "exit" {
+			if closer, ok := f.out.(io.Closer); ok {
+				closer.Close()
+			}
+			return
+		}
 		// 打开文档时附带的焦点切换与各测试关心的消息无关，直接回应。
 		if m.Method == "workspace/executeCommand" && strings.Contains(string(m.Params), "tinymist.focusMain") {
 			f.reply(m.ID, "null")
@@ -308,7 +318,7 @@ func TestDiagnosticsCarrySyncedSnapshot(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	cl.CloseDoc(doc.Path)
+	cl.CloseDoc(doc.Path, doc.Session)
 	f.notify("textDocument/publishDiagnostics", note)
 	if stale := <-got; stale != nil {
 		t.Fatalf("关闭文档后仍携带旧快照：%+v", stale)

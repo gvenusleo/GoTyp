@@ -242,7 +242,19 @@ func (cl *Client) syncLocked(ctx context.Context, doc Document, force bool) (*co
 	if doc.Session < cl.session {
 		return nil, errStale
 	}
+	if doc.Session != cl.session && cl.conn != nil {
+		// didClose 的文件缓存失效没有完成回执；新会话必须隔离尚未安装的旧内存事件。
+		if !cl.conn.closed() {
+			shutdown(ctx, cl.conn)
+			cl.starts--
+		}
+		cl.conn = nil
+		cl.docs.Clear()
+	}
 	cl.session = doc.Session
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	c, err := cl.connect()
 	if err != nil {
 		return nil, err
@@ -331,13 +343,17 @@ func focus(c *conn, path any) error {
 	return nil
 }
 
-// CloseDoc 通知服务端不再编辑 path。进程未启动或已退出时什么也不做。
-func (cl *Client) CloseDoc(path string) {
+// CloseDoc 通知服务端关闭指定会话的 path，旧会话的关闭任务不能影响新会话。
+func (cl *Client) CloseDoc(path string, session uint64) {
 	cl.mu.Lock()
 	defer cl.mu.Unlock()
-	value, _ := cl.docs.LoadAndDelete(path)
+	value, _ := cl.docs.Load(path)
 	st, _ := value.(*docState)
-	if st == nil || st.conn.closed() {
+	if st == nil || st.doc.Session != session {
+		return
+	}
+	cl.docs.Delete(path)
+	if st.conn.closed() {
 		return
 	}
 	st.conn.notify("textDocument/didClose", map[string]any{"textDocument": map[string]any{"uri": fileURI(path)}})

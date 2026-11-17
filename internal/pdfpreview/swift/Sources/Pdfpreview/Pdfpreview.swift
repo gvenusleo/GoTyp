@@ -70,7 +70,8 @@ final class PreviewView: PDFView, Viewer {
 
 }
 
-@MainActor private final class PreviewLinkDelegate: NSObject, PDFViewDelegate {
+// PDFKit 的旧 delegate 协议没有并发标注；回调保持主线程隔离，并在运行时检查。
+@MainActor private final class PreviewLinkDelegate: NSObject, @preconcurrency PDFViewDelegate {
     func pdfViewWillClick(onLink sender: PDFView, with url: URL) {
         guard let scheme = url.scheme?.lowercased(),
               ["http", "https", "mailto"].contains(scheme),
