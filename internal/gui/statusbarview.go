@@ -87,9 +87,9 @@ func statusItem(c *ui.Context, tip string, svg *ui.SVG, text string, color ui.Co
 			if busy {
 				ui.Spinner(c).Size(spinnerSize, spinnerSize).Label(tip)
 			} else if svg != nil {
-				ui.Icon(c, svg).FontSize(detailFontSize).TextColor(color)
+				ui.Icon(c, svg).FontSize(statusFontSize).TextColor(color)
 			}
-			ui.Text(c, text).FontSize(detailFontSize).TextColor(color).SingleLine().FontFeatures("tnum")
+			ui.Text(c, text).FontSize(statusFontSize).TextColor(color).SingleLine().FontFeatures("tnum")
 		})
 	}
 	if onClick == nil {
