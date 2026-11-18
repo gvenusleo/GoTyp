@@ -3,40 +3,34 @@ package tinymist
 import (
 	"context"
 	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
-// ExportPDF 独立请求当前快照的 PDF 字节，不读取、覆盖或删除自动预览文件。
-func (cl *Client) ExportPDF(ctx context.Context, doc Document) ([]byte, error) {
-	cl.exportMu.Lock()
-	defer cl.exportMu.Unlock()
-	var res struct {
-		Data []byte `json:"data"`
+// ExportPDF 从磁盘编译，独立于预览进程中的未保存文档。
+func ExportPDF(ctx context.Context, root, source string) ([]byte, error) {
+	dir, err := makeTemp("export")
+	if err != nil {
+		return nil, err
 	}
-	params := map[string]any{"command": "tinymist.exportPdf", "arguments": []any{
-		doc.Path, map[string]any{}, map[string]any{"write": false},
-	}}
-	if err := cl.syncCall(ctx, doc, "workspace/executeCommand", params, &res); err != nil {
-		if rpc, ok := errors.AsType[*rpcError](err); ok {
-			return nil, errors.New(firstError(rpc.Message))
+	defer os.RemoveAll(dir)
+	output := filepath.Join(dir, "export.pdf")
+	cmd := exec.CommandContext(ctx, "tinymist", "compile", "--root", root, source, output)
+	cmd.Dir = root
+	log, err := cmd.CombinedOutput()
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if errors.Is(err, exec.ErrNotFound) {
+			return nil, ErrUnavailable
+		}
+		if msg := strings.TrimSpace(string(log)); msg != "" {
+			return nil, errors.New(msg)
 		}
 		return nil, err
 	}
-	if len(res.Data) == 0 {
-		return nil, errors.New("tinymist 没有返回 PDF 数据")
-	}
-	return res.Data, nil
-}
-
-// firstError 从 tinymist 的导出错误中取出第一条 Typst 错误，其余的诊断面板里都有。
-func firstError(msg string) string {
-	i := strings.Index(msg, "error: ")
-	if i < 0 {
-		return msg
-	}
-	msg = msg[i+len("error: "):]
-	if j := strings.IndexAny(msg, "\n\\"); j >= 0 {
-		msg = msg[:j]
-	}
-	return strings.TrimSpace(msg)
+	return os.ReadFile(output)
 }

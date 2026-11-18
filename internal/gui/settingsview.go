@@ -11,6 +11,7 @@ type settingsCategory struct {
 
 var settingsCategories = []settingsCategory{
 	{"外观", iconPalette, (*App).appearanceView},
+	{"编辑", iconPencil, (*App).editingView},
 }
 
 // settingsView 是设置面板：左侧是分类，右侧是当前分类的各项，右上角关闭。
@@ -78,6 +79,15 @@ func (a *App) settingsContent(c *ui.Context) {
 			ui.Column(c).Gap(settingsGap).Padding(settingsPad).Children(func() {
 				settingsCategories[a.settings.category].view(a, c)
 			})
+		})
+	})
+}
+
+func (a *App) editingView(c *ui.Context) {
+	settingRow(c, "编辑时自动保存", func() {
+		ui.Switch(c.Key("settings-autosave"), &a.settings.autosave).Label("编辑时自动保存").OnChange(func() {
+			a.state.DisableAutosave = !a.settings.autosave
+			a.saveState()
 		})
 	})
 }

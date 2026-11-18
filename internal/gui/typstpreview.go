@@ -3,17 +3,12 @@ package gui
 import (
 	"context"
 	"errors"
-	"time"
-
-	"github.com/egoist/mygo/ui"
 
 	"gotyp/internal/tinymist"
 	"gotyp/internal/vault"
 )
 
-const syncDelay = 150 * time.Millisecond
-
-// previewChanged 取消尚未安装的旧 PDF，并在编辑停顿后提交新快照。
+// previewChanged 取消尚未安装的旧 PDF。
 func (a *App) previewChanged(s *session) {
 	if a.current != s || s.lspPath == "" {
 		return
@@ -22,22 +17,16 @@ func (a *App) previewChanged(s *session) {
 		s.previewCancel()
 		s.previewCancel = nil
 	}
-	s.syncDue = time.Time{}
 	if !s.previewMissing {
 		s.previewErr = ""
 	}
 }
 
-func (a *App) schedulePreview(c *ui.Context, s *session) {
-	if a.current != s || s.lspPath == "" || a.lsp == nil || (s.syncedVersion == s.observed && len(s.previewFiles) == 0) {
+func (a *App) schedulePreview(s *session) {
+	if a.current != s || s.lspPath == "" || a.lsp == nil || s.syncing {
 		return
 	}
-	if s.syncDue.IsZero() {
-		s.syncDue = c.Now().Add(syncDelay)
-	}
-	if wait := s.syncDue.Sub(c.Now()); wait > 0 {
-		c.After(wait)
-	} else {
+	if s.syncedVersion != s.observed || len(s.previewFiles) > 0 {
 		a.syncLSP(s)
 	}
 }
@@ -46,7 +35,7 @@ func (a *App) syncLSP(s *session) {
 	client, ctx, doc := a.lsp, s.lspContext, s.lspDocument()
 	paths := s.previewFiles
 	s.previewFiles = nil
-	s.syncedVersion, s.syncDue = doc.Version, time.Time{}
+	s.syncedVersion, s.syncing = doc.Version, true
 	s.previewStarting = !s.previewReady
 	a.lspQueue.run(func() {
 		var err error
@@ -55,9 +44,15 @@ func (a *App) syncLSP(s *session) {
 		} else {
 			err = client.OpenContext(ctx, doc)
 		}
-		if err != nil {
-			a.publish(func() { a.receivePDF(client, doc, nil, err) })
-		}
+		a.publish(func() {
+			if a.current != s || a.lsp != client || s.lspID != doc.Session {
+				return
+			}
+			s.syncing = false
+			if err != nil {
+				a.receivePDF(client, doc, nil, err)
+			}
+		})
 	})
 }
 

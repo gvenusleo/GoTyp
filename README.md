@@ -3,14 +3,14 @@
 GoTyp 是用 Go 编写的本地笔记应用，界面由 MyGo Native UI 绘制。打开一个文件夹作为笔记仓库，在单窗口里编辑 Markdown 和 Typst 源码，旁边是原生预览。
 
 - Markdown 有编辑、分屏、预览三种模式，本地图片和笔记间的相对链接可以直接用
-- Typst 在后台编译，分页预览，显示编译错误，可以导出 PDF；装了 tinymist 时有补全和悬停文档
+- Typst 随输入实时更新分页预览，显示编译错误，支持补全和悬停文档。导出 PDF 使用磁盘上已保存的版本
 - 仓库里的其他文件也在文件树中：纯文本直接编辑，图片在应用内显示，其余交给系统默认应用
-- 自动保存先写临时文件再原子替换，其他程序改过的文件不会被静默覆盖
+- 在「设置」的「编辑」页可关闭编辑时自动保存。手动保存、切换笔记和退出时仍会保存，写入前检查外部修改，再原子替换文件
 - 笔记就是仓库里的原始文件，GoTyp 不往仓库里写自己的文件
 
 ## 依赖
 
-Typst 预览和导出需要 `PATH` 中的 [Typst](https://typst.app) CLI，补全和悬停需要 [tinymist](https://github.com/Myriad-Dreamin/tinymist)。两者都可以不装：没有 typst 时 Typst 笔记照样编辑和保存，没有 tinymist 时只是少了补全和悬停。目前在 Typst 0.15.1 上验证过。
+Typst 预览、PDF 导出和编辑辅助都使用 `PATH` 中的 tinymist。缺少 tinymist 时，仍可编辑和保存 Typst 笔记。[tinymist 项目](https://github.com/Myriad-Dreamin/tinymist)
 
 从访达或程序坞启动的应用拿不到 shell 配置的 `PATH`，所以 GoTyp 启动时会额外查找 `/opt/homebrew/bin`、`/usr/local/bin`、`~/.cargo/bin`、`~/.local/bin` 和 mise 的 shims 目录。
 
@@ -37,8 +37,7 @@ mise run ci        # 格式检查、vet、测试、编译、漏洞扫描
 | --- | --- |
 | `cmd/gotyp` | 组装依赖并启动应用 |
 | `internal/vault` | 仓库路径、扫描、读取、原子保存和冲突检查，不依赖界面 |
-| `internal/typst` | 调用 Typst CLI 编译、取消和读取输出 |
-| `internal/tinymist` | tinymist 进程、JSON-RPC、文本同步和坐标换算 |
+| `internal/tinymist` | tinymist 进程、编辑辅助、实时预览和已保存笔记的 PDF 导出 |
 | `internal/gui` | 应用状态、用户动作和界面 |
 
 ## 许可

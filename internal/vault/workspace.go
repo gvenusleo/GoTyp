@@ -33,9 +33,10 @@ type Appearance struct {
 
 // State 是保存在用户配置目录中的应用状态。它可以随时删除，不影响任何笔记。
 type State struct {
-	Appearance Appearance           `json:"appearance,omitzero"`
-	Recent     []string             `json:"recent,omitempty"`
-	Workspaces map[string]Workspace `json:"workspaces,omitempty"`
+	DisableAutosave bool                 `json:"disableAutosave,omitzero"`
+	Appearance      Appearance           `json:"appearance,omitzero"`
+	Recent          []string             `json:"recent,omitempty"`
+	Workspaces      map[string]Workspace `json:"workspaces,omitempty"`
 }
 
 // Touch 把仓库移到最近列表最前面，并丢弃超出上限的旧仓库及其界面状态。
@@ -60,7 +61,9 @@ func (s *State) SetWorkspace(root string, w Workspace) {
 
 // Clone 返回可以交给后台写入的独立副本。
 func (s State) Clone() State {
-	out := State{Appearance: s.Appearance, Recent: slices.Clone(s.Recent), Workspaces: make(map[string]Workspace, len(s.Workspaces))}
+	out := s
+	out.Recent = slices.Clone(s.Recent)
+	out.Workspaces = make(map[string]Workspace, len(s.Workspaces))
 	for k, v := range s.Workspaces {
 		out.Workspaces[k] = v
 	}

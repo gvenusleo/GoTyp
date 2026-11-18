@@ -2,11 +2,13 @@ package tinymist
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"net/textproto"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -264,25 +266,34 @@ func TestRenameRejectsOtherFiles(t *testing.T) {
 	}
 }
 
-// tinymist 报告的导出路径不在临时目录中时，既不读取也不删除，避免误删仓库里的文件。
-func TestExportRefusesPathOutsideTempDir(t *testing.T) {
-	cl, f := startFake(t)
-	victim := filepath.Join(t.TempDir(), "note.pdf")
-	if err := os.WriteFile(victim, []byte("keep"), 0o644); err != nil {
+// 导出从磁盘解析相对依赖；成功和失败都不能覆盖仓库中的同名 PDF。
+func TestExportFromDisk(t *testing.T) {
+	if _, err := exec.LookPath("tinymist"); err != nil {
+		t.Skip("未安装 tinymist")
+	}
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
 		t.Fatal(err)
 	}
-	done := make(chan error, 1)
-	go func() {
-		_, err := cl.ExportPDF(context.Background(), Document{Path: "/v/a.typ", Text: "= A", Version: 1})
-		done <- err
-	}()
-	req := f.next(t, "workspace/executeCommand")
-	f.reply(req.ID, `{"path":`+strconv.Quote(victim)+`}`)
-	if err := <-done; err == nil {
-		t.Fatal("临时目录之外的导出结果被接受")
+	note := filepath.Join(root, "note.typ")
+	if err := os.WriteFile(note, []byte(`#include "part.typ"`), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if data, err := os.ReadFile(victim); err != nil || string(data) != "keep" {
-		t.Fatalf("临时目录之外的文件被改动：%q, %v", data, err)
+	pdf := filepath.Join(root, "note.pdf")
+	if err := os.WriteFile(pdf, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ExportPDF(t.Context(), root, note); err == nil {
+		t.Fatal("缺失依赖时导出应失败")
+	}
+	if err := os.WriteFile(filepath.Join(root, "part.typ"), []byte("Saved"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := ExportPDF(t.Context(), root, note); err != nil || !bytes.HasPrefix(data, []byte("%PDF-")) {
+		t.Fatalf("导出失败：%v", err)
+	}
+	if data, err := os.ReadFile(pdf); err != nil || string(data) != "keep" {
+		t.Fatalf("仓库中的 PDF 被改动：%q, %v", data, err)
 	}
 }
 

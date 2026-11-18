@@ -16,6 +16,7 @@ import (
 	"github.com/egoist/mygo/ui/markdown"
 	"github.com/egoist/mygo/ui/markdown/parser"
 
+	"gotyp/internal/tinymist"
 	"gotyp/internal/vault"
 )
 
@@ -36,14 +37,7 @@ func (a *App) configurePreview(s *session) {
 
 func (a *App) exportPDFDialog() {
 	s := a.current
-	if s == nil || s.kind != vault.KindTypst {
-		return
-	}
-	if !a.typstReady() {
-		a.notify("tinymist 不可用，无法导出 PDF")
-		return
-	}
-	if a.busy {
+	if s == nil || s.kind != vault.KindTypst || a.vault == nil || a.busy {
 		return
 	}
 	name, err := mygo.Dialog.Save(mygo.SaveDialogOptions{
@@ -55,19 +49,14 @@ func (a *App) exportPDFDialog() {
 	if err != nil || name == "" {
 		return
 	}
-	// 主线程等待导出完成，期间不能编辑或切换笔记，快照不会跨会话排队。
-	ctx, cancel := context.WithTimeout(a.ctx, exportTimeout)
-	defer cancel()
-	// 先等此前的打开、关闭和文本同步完成，避免刚切换笔记就导出时撞上旧会话。
-	ready := make(chan struct{})
-	a.lspQueue.run(func() { close(ready) })
-	select {
-	case <-ready:
-	case <-ctx.Done():
-		a.notify("PDF 导出失败：编译超时")
+	source, err := a.vault.Resolve(s.id)
+	if err != nil {
+		a.notify("PDF 导出失败：" + err.Error())
 		return
 	}
-	data, err := a.lsp.ExportPDF(ctx, s.lspDocument())
+	ctx, cancel := context.WithTimeout(a.ctx, exportTimeout)
+	defer cancel()
+	data, err := tinymist.ExportPDF(ctx, a.vault.Root(), source)
 	if errors.Is(err, context.DeadlineExceeded) {
 		err = errors.New("编译超时")
 	}

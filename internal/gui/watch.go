@@ -82,7 +82,6 @@ func (a *App) filesChanged(v *vault.Vault, events []mygo.FileEvent) {
 				if e.OldPath != "" {
 					s.previewFiles = append(s.previewFiles, filepath.Join(v.Root(), filepath.FromSlash(e.OldPath)))
 				}
-				s.syncDue = time.Time{}
 			}
 		}
 		for _, e := range events {

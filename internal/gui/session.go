@@ -50,7 +50,7 @@ type session struct {
 	// Typst 预览快照的状态，见 typstpreview.go。
 	syncedVersion   uint64
 	diagSnapshot    *tinymist.Document
-	syncDue         time.Time
+	syncing         bool
 	previewReady    bool
 	previewStarting bool
 	previewCancel   context.CancelFunc
@@ -133,8 +133,8 @@ func (a *App) observe(c *ui.Context, s *session) {
 		a.previewChanged(s)
 		a.syncWindow()
 	}
-	a.schedulePreview(c, s)
-	if !s.dirty() || s.saving || s.conflict || a.busy {
+	a.schedulePreview(s)
+	if a.state.DisableAutosave || !s.dirty() || s.saving || s.conflict || a.busy {
 		return
 	}
 	now := c.Now()
