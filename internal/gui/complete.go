@@ -24,7 +24,7 @@ const (
 	// docLimit 是补全文档摘要的最大字符数，约三行，避免挤掉条目列表。
 	docLimit = 160
 	// lspIdle 是没有打开 Typst 笔记多久后结束 tinymist。它常驻数百 MB，
-	// 重新启动只要几秒，短暂切到别的笔记再回来时不必重启。
+	// 下一篇笔记会建立新连接；空闲时也主动归还旧进程占用的字体和图片缓存。
 	lspIdle = 5 * time.Minute
 )
 
@@ -144,8 +144,8 @@ func (a *App) detachLSP(s *session) {
 	s.diagSnapshot = nil
 	a.diags, a.diagReport = nil, diagReport{}
 	if client := a.lsp; client != nil {
-		path := s.lspPath
-		a.lspQueue.run(func() { client.CloseDoc(path) })
+		path, id := s.lspPath, s.lspID
+		a.lspQueue.run(func() { client.CloseDoc(path, id) })
 		a.scheduleLSPSuspend(client)
 	}
 	s.lspPath = ""

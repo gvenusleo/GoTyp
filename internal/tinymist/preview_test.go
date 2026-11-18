@@ -10,6 +10,63 @@ import (
 	"testing"
 )
 
+// 切换主文件时，内存更新可能晚于入口编译；磁盘产物不能冒充当前快照或进入复用缓存。
+func TestPreviewSwitchUsesMemoryResult(t *testing.T) {
+	cl, f := startFake(t)
+	results := make(chan string, 3)
+	cl.OnPreview(func(_ Document, data []byte, err error) {
+		if err == nil {
+			results <- string(data)
+		}
+	})
+	var firstConn *conn
+	for i := range 2 {
+		if i > 0 {
+			fresh, server := startFake(t)
+			server.got = f.got
+			cl.launch = fresh.launch
+		}
+		doc := Document{Path: "/v/a.typ", Text: "memory", Version: 1, Session: uint64(i + 1)}
+		done := make(chan error, 1)
+		go func() { done <- cl.OpenContext(t.Context(), doc) }()
+		output := previewOutput(t, f)
+		f.next(t, "textDocument/didOpen")
+		data := doc.Text
+		if i > 0 && cl.conn == firstConn {
+			// 旧进程会先导出磁盘版本，新进程没有尚未安装的上一会话内存事件。
+			data = "disk"
+		}
+		if err := os.WriteFile(output, []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		if got := <-results; got != doc.Text {
+			t.Errorf("预览 = %q，期望内存快照 %q", got, doc.Text)
+		}
+		if i > 0 {
+			if cl.starts != 1 {
+				t.Fatalf("主动切换会话消耗了崩溃重启次数：%d", cl.starts)
+			}
+			// 旧关闭任务即使排在新会话的补全同步之后，也不能关闭同一路径的新文档。
+			cl.CloseDoc(doc.Path, doc.Session-1)
+			if value, ok := cl.docs.Load(doc.Path); !ok || value.(*docState).doc != doc {
+				t.Fatal("旧会话的关闭任务删除了新会话快照")
+			}
+			doc.Version++
+			if err := cl.OpenContext(t.Context(), doc); err != nil {
+				t.Fatal(err)
+			}
+			if got := <-results; got != doc.Text {
+				t.Errorf("复用缓存 = %q，期望内存快照 %q", got, doc.Text)
+			}
+		}
+		firstConn = cl.conn
+		cl.CloseDoc(doc.Path, doc.Session)
+	}
+}
+
 // 外部变化只失效磁盘缓存，不把大文件正文复制进 JSON-RPC，也不因文件较大重启编译器。
 func TestRefreshInvalidatesWithoutCopyingFiles(t *testing.T) {
 	cl, f := startFake(t)
