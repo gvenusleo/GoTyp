@@ -20,10 +20,10 @@ GoTyp 是本地桌面笔记应用。用户打开一个文件夹作为笔记仓�
 
 ## 技术基线
 
-- Go `1.27.3`，MyGo 版本以 `go.mod` 为准，应用标识 `xin.liuyu.gotyp`
+- Go `1.27.4`，MyGo 版本以 `go.mod` 为准，应用标识 `xin.liuyu.gotyp`
 - tinymist `0.15.12`（内置 Typst `0.15.1`），通过 stdio 上的 LSP 通信，是唯一的 Typst 依赖；不调用 Typst CLI，不引入 Typst 绑定或 Rust 库
 - macOS PDF 预览使用 Swift 和系统 PDFKit，由 MyGo 原生模块生成绑定并随应用构建；其他平台仍可编辑、保存和导出，原生预览暂不可用
-- macOS App 包通过 `macos.infoPlist` 声明简体中文本地化，让 PDFKit 和 AppKit 的系统菜单使用中文；MyGo 的运行时 `SetLanguages` 不替代包内语言声明
+- macOS App 包通过 `macos.infoPlist` 声明简体中文本地化，让 PDFKit 和 AppKit 的系统菜单使用中文；MyGo 的运行时 `SetLanguages` 不替代包内语言声明。Go 1.27 要求 macOS 13 Ventura 或更高版本
 
 `tinymist` 从 `PATH` 查找，不自动下载或捆绑。从图形界面启动时进程拿不到 shell 的 `PATH`，因此启动时把 `/opt/homebrew/bin`、`/usr/local/bin`、`~/.cargo/bin`、`~/.local/bin` 和 mise shims 目录中尚未包含的追加到 `PATH` 末尾（Windows 除外），不启动 shell 读取配置。
 

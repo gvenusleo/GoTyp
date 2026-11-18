@@ -1,12 +1,12 @@
 module gotyp
 
-go 1.27.3
+go 1.27.4
 
 tool github.com/egoist/mygo/cmd/mygo
 
 require (
-	github.com/egoist/mygo v0.9.1-0.20261111182651-0d644f4aca24
-	golang.org/x/image v0.46.0
+	github.com/egoist/mygo v0.10.0
+	golang.org/x/image v0.48.0
 )
 
 require (
@@ -19,6 +19,6 @@ require (
 	go.digitalxero.dev/rpm v0.3.4 // indirect
 	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/net v0.59.0 // indirect
-	golang.org/x/sys v0.48.0 // indirect
-	golang.org/x/text v0.43.0 // indirect
+	golang.org/x/sys v0.50.0 // indirect
+	golang.org/x/text v0.44.0 // indirect
 )
