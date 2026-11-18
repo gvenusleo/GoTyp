@@ -14,8 +14,8 @@ import (
 const (
 	// headerHeight 是文档头与侧栏顶部的高度，红绿灯在其中垂直居中，见 app.go。
 	headerHeight      = 38
-	statusHeight      = 28
-	statusItemHeight  = 22
+	statusHeight      = 24
+	statusItemHeight  = 20
 	textWidth         = 720
 	previewInset      = 20
 	previewSideInset  = 28
@@ -68,10 +68,11 @@ const (
 	bannerOpacity = 0.10
 )
 
-// 字号，单位为 DIP。正文沿用主题字号；文件树和列表略小，状态栏和诊断再小一号。
+// 字号，单位为 DIP。正文沿用主题字号。
 const (
 	textSize       = 13
 	detailFontSize = 12
+	statusFontSize = 11
 	captionSize    = 10 // 仓库路径这类最次要的附注
 	codeFontSize   = 13 // 编辑器与设置里的代码预览
 )
