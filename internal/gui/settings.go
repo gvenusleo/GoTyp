@@ -67,7 +67,6 @@ type settingsState struct {
 	uiFont, codeFont string
 	// 字体框的选项，默认的在最前；系统字体读回之前只有默认的。
 	uiFonts, codeFonts []string
-	recolor            bool
 }
 
 func (a *App) openSettings() {
@@ -78,7 +77,6 @@ func (a *App) openSettings() {
 		theme:  themeIndex(ap.Theme),
 		uiFont: fontLabel(ap.UIFont), codeFont: fontLabel(ap.CodeFont),
 		uiFonts: []string{defaultFont}, codeFonts: []string{defaultFont},
-		recolor: ap.RecolorPreview,
 	}
 	a.loadFonts(s.gen)
 }
@@ -132,12 +130,6 @@ func (a *App) chooseFonts() {
 	a.setAppearance(ap)
 }
 
-func (a *App) choosePreview() {
-	ap := a.state.Appearance
-	ap.RecolorPreview = a.settings.recolor
-	a.setAppearance(ap)
-}
-
 // setAppearance 立即生效并保存。界面主题按外观设置缓存（见 applyTheme），下一帧自动重建；
 // 编辑器字体存在会话里，这里同步。
 func (a *App) setAppearance(ap vault.Appearance) {
@@ -154,6 +146,5 @@ func (a *App) setAppearance(ap vault.Appearance) {
 	if a.current != nil {
 		a.applyEditorPrefs(a.current)
 	}
-	// 调色开关和主题不用在这里处理：预览任务发现配色不一致后自行重启。
 	a.saveState()
 }

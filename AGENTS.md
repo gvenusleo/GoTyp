@@ -7,15 +7,16 @@ GoTyp 是用 Go 和 MyGo Native UI 编写的本地笔记应用。唯一的产品
 - 保持简单：不为未发生的需求增加抽象、配置项、插件层或通用框架。
 - 先设计，后改码：改变产品边界、数据格式、UI 技术路线、保存语义或 Typst 渲染方式时，先修改 `docs/design.md` 并得到确认。
 - 笔记源码是用户数据：保存失败不能丢弃内存中的编辑，不能静默覆盖外部修改，不能要求用户删除或迁移现有笔记来回避兼容问题。
-- 界面参考 Linear 的极简风格：视觉参数只在 `internal/gui/theme.go` 集中设置，强调色跟随系统；使用 MyGo 原生组件和 Lucide 图标，不放解释性文字，不做自绘业务组件。WebView 只用于 Typst 预览区显示 tinymist 预览页，其他界面不用 WebView。
+- 界面参考 Linear 的极简风格：视觉参数只在 `internal/gui/theme.go` 集中设置，强调色跟随系统；使用 MyGo 原生组件和 Lucide 图标，不放解释性文字，不做自绘业务组件。Typst 预览通过 MyGo 原生模块嵌入 macOS PDFKit，不使用 WebView。
 
 ## 分层与依赖
 
 - `cmd/gotyp` 只负责组装依赖和启动应用，不放业务逻辑或界面。
 - `internal/vault` 负责仓库路径、扫描、读取、原子保存和冲突检查，不 import MyGo 或 GUI。
 - `internal/tinymist` 负责 tinymist 进程、JSON-RPC、文本同步、坐标换算、预览任务、编辑辅助和 PDF 导出，输出自己的类型，不 import GUI 或 MyGo。
+- `internal/pdfpreview` 声明原生 PDF 视图接口，并通过 Swift 实现 PDFKit 显示、后台解码和阅读位置保持，不依赖 GUI。
 - `internal/gui` 负责应用状态、用户动作和 Native UI。状态与动作放在 `xxx.go`，界面构建放在对应的 `xxxview.go`。
-- `internal/gui` 可以使用 `internal/vault` 和 `internal/tinymist`，这两个包不能反向依赖 GUI。
+- `internal/gui` 可以使用 `internal/vault`、`internal/tinymist` 和 `internal/pdfpreview`，这些包不能反向依赖 GUI。
 - Markdown 与 Typst 保留两条明确的预览分支，不引入通用渲染接口。
 
 ## 编码规范
@@ -31,6 +32,7 @@ GoTyp 是用 Go 和 MyGo Native UI 编写的本地笔记应用。唯一的产品
 - 界面状态只在主线程读写。后台 goroutine 启动前取出所需快照和参数，不在后台读取 GUI 状态。
 - 文件 I/O、Typst 编译、图片解码和其他慢操作在后台执行，不得在 view 中执行。唯一例外是用户触发的 PDF 导出：在主线程同步完成，期间暂停界面操作。
 - 后台结果通过 `Window.Update` 回到主线程，并按笔记 ID 和源版本核对；过期结果直接丢弃。
+- tinymist 同步使用本次调用的取消信号，编辑请求从当前会话派生 context。相同源码只更新版本并复用编译结果，不等待新的自动 PDF。原生 PDF 加载在修改加载代次前检查取消。
 - view 可以多次重建，不得在渲染过程中无条件启动保存、编译或其他副作用。
 - `editor.State`、列表状态和预览数据持久保存在应用状态中。不得保存 `ui.Element`、构建部件或 `*ui.Context`。
 - 为编辑器、列表行和其他有状态控件设置稳定的 `c.Key`，切换笔记后不能串用焦点、选择或撤销状态。
@@ -53,7 +55,7 @@ Go 工具通过 mise 运行：
 | `mise run fmt` | 格式化 Go 文件 |
 | `mise run fmt-check` | 检查格式 |
 | `mise run vet` | 运行 `go vet` 和 `mygo vet` |
-| `mise run test` | 运行带竞态检测的测试 |
+| `mise run test` | 运行带竞态检测的 Go 测试；macOS 还运行原生模块 XCTest |
 | `mise run test-nocgo` | 验证无 cgo 构建与测试 |
 | `mise run build` | 编译安装包 |
 | `mise run ci` | 运行完整检查 |

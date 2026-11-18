@@ -153,35 +153,88 @@ func TestStaleRequestDoesNotRewindText(t *testing.T) {
 	}
 }
 
-// 等待中的预览启动被取消时，服务端可能已经起了任务，要随即结束它，不留下占着端口的服务。
-func TestStartPreviewCancelKillsTask(t *testing.T) {
+// 等待自动 PDF 时取消必须结束旧连接，迟到的输出不能进入下一次同步。
+func TestPreviewCancelClosesConnection(t *testing.T) {
 	cl, f := startFake(t)
-	ctx, cancel := context.WithCancel(context.Background())
+	cl.OnPreview(func(Document, []byte, error) {})
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() {
-		_, err := cl.StartPreview(ctx, Document{Path: "/v/a.typ", Text: "= A", Version: 1}, "gotyp-1", false)
-		done <- err
-	}()
+	go func() { done <- cl.OpenContext(ctx, Document{Path: "/v/a.typ", Text: "= A", Version: 1}) }()
 	f.next(t, "textDocument/didOpen")
-	start := f.next(t, "workspace/executeCommand")
 	cancel()
 	if err := <-done; err != context.Canceled {
 		t.Fatalf("err = %v，期望 context.Canceled", err)
 	}
-	f.reply(start.ID, `{"staticServerPort":1}`)
-	for {
-		m := f.next(t, "workspace/executeCommand")
-		var p struct {
-			Command   string `json:"command"`
-			Arguments []any  `json:"arguments"`
+	if cl.conn != nil {
+		t.Fatal("取消后仍保留旧连接")
+	}
+}
+
+// 后一版源码必须等前一版 PDF 完成后才发送，输出的快照版本不能错配。
+func TestPreviewSerializesSnapshots(t *testing.T) {
+	cl, f := startFake(t)
+	got := make(chan Document, 2)
+	cl.OnPreview(func(doc Document, data []byte, err error) {
+		if err == nil && string(data) == doc.Text {
+			got <- doc
 		}
-		json.Unmarshal(m.Params, &p)
-		if p.Command == "tinymist.doKillPreview" {
-			if len(p.Arguments) != 1 || p.Arguments[0] != "gotyp-1" {
-				t.Fatalf("结束的任务 = %v，期望 gotyp-1", p.Arguments)
-			}
-			return
+	})
+	first := Document{Path: "/v/a.typ", Text: "first", Version: 1}
+	second := Document{Path: first.Path, Text: "second", Version: 2}
+	done := make(chan error, 2)
+	go func() { done <- cl.OpenContext(t.Context(), first) }()
+	output := previewOutput(t, f)
+	f.next(t, "textDocument/didOpen")
+	go func() { done <- cl.OpenContext(t.Context(), second) }()
+	if err := os.WriteFile(output, []byte(first.Text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if doc := <-got; doc != first {
+		t.Fatalf("第一份快照 = %+v", doc)
+	}
+	output = previewOutput(t, f)
+	f.next(t, "textDocument/didChange")
+	if err := os.WriteFile(output, []byte(second.Text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if doc := <-got; doc != second {
+		t.Fatalf("第二份快照 = %+v", doc)
+	}
+	for range 2 {
+		if err := <-done; err != nil {
+			t.Fatal(err)
 		}
+	}
+}
+
+func previewOutput(t *testing.T, f *fakeServer) string {
+	t.Helper()
+	m := f.next(t, "workspace/didChangeConfiguration")
+	var p struct {
+		Settings struct {
+			Output string `json:"outputPath"`
+		} `json:"settings"`
+	}
+	if err := json.Unmarshal(m.Params, &p); err != nil {
+		t.Fatal(err)
+	}
+	return p.Settings.Output + ".pdf"
+}
+
+// 编译错误应结束本次等待并允许后续编辑继续，不能等待不存在的 PDF 直到超时。
+func TestPreviewCompileErrorKeepsConnection(t *testing.T) {
+	cl, f := startFake(t)
+	got := make(chan error, 1)
+	cl.OnPreview(func(_ Document, _ []byte, err error) { got <- err })
+	done := make(chan error, 1)
+	go func() { done <- cl.OpenContext(t.Context(), Document{Path: "/v/a.typ", Text: "#(", Version: 1}) }()
+	f.next(t, "textDocument/didOpen")
+	f.notify("tinymist/compileStatus", `{"path":"/v/a.typ","status":"compileError"}`)
+	if err := <-got; err != ErrCompile {
+		t.Fatalf("编译结果 = %v", err)
+	}
+	if err := <-done; err != nil || cl.conn == nil {
+		t.Fatalf("编译失败破坏了连接：%v", err)
 	}
 }
 

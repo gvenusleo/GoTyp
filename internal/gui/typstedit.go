@@ -16,8 +16,6 @@ import (
 const (
 	// lspTimeout 是跳转、格式化和重命名等一次性请求的上限，tinymist 卡住时不让操作一直挂着。
 	lspTimeout = 10 * time.Second
-	// scrollDelay 是光标停留多久后让预览跟过去，连续移动时只同步最后的位置。
-	scrollDelay = 300 * time.Millisecond
 )
 
 // noteJump 是打开 id 后要移动到的位置。
@@ -96,8 +94,8 @@ func (a *App) requestDefinition(s *session, offset int) {
 		return
 	}
 	doc := s.lspDocument()
+	ctx, cancel := context.WithTimeout(s.lspContext, lspTimeout)
 	go func() {
-		ctx, cancel := context.WithTimeout(a.ctx, lspTimeout)
 		defer cancel()
 		loc, ok, err := client.Definition(ctx, doc, offset)
 		a.publish(func() {
@@ -167,17 +165,14 @@ func (a *App) applyPendingJump(s *session) {
 	}
 }
 
-// showDocument 处理预览页中的点击：tinymist 请求打开源码中的位置。
+// showDocument 处理服务端发起的源码跳转。
 func (a *App) showDocument(client *tinymist.Client, name string, at tinymist.Position) {
 	s := a.current
 	if a.lsp != client || s == nil || s.lspPath == "" {
 		return
 	}
 	if name == s.lspPath {
-		if a.moveCursor(s, at) {
-			// 光标是跟着预览来的，不必再让预览滚回去。
-			s.scrollLine, s.scrollDue = s.ed.CursorPos().Line, time.Time{}
-		}
+		a.moveCursor(s, at)
 		return
 	}
 	a.jumpTo(s, tinymist.Location{Path: name, At: at})
@@ -195,8 +190,8 @@ func (a *App) formatCurrent() {
 		tab = 2
 	}
 	s.formatting = true
+	ctx, cancel := context.WithTimeout(s.lspContext, lspTimeout)
 	go func() {
-		ctx, cancel := context.WithTimeout(a.ctx, lspTimeout)
 		defer cancel()
 		edits, err := client.Format(ctx, doc, tab)
 		a.publish(func() {
@@ -234,8 +229,8 @@ func (a *App) startSymbolRename() {
 		return
 	}
 	doc, offset := s.lspDocument(), s.ed.Cursor()
+	ctx, cancel := context.WithTimeout(s.lspContext, lspTimeout)
 	go func() {
-		ctx, cancel := context.WithTimeout(a.ctx, lspTimeout)
 		defer cancel()
 		_, _, name, ok, err := client.PrepareRename(ctx, doc, offset)
 		a.publish(func() {
@@ -261,8 +256,8 @@ func (a *App) commitSymbolRename() {
 		return
 	}
 	doc := s.lspDocument()
+	ctx, cancel := context.WithTimeout(s.lspContext, lspTimeout)
 	go func() {
-		ctx, cancel := context.WithTimeout(a.ctx, lspTimeout)
 		defer cancel()
 		edits, err := client.Rename(ctx, doc, r.offset, name)
 		a.publish(func() {
@@ -290,8 +285,8 @@ func (a *App) openHeadings() {
 		return
 	}
 	doc := s.lspDocument()
+	ctx, cancel := context.WithTimeout(s.lspContext, lspTimeout)
 	go func() {
-		ctx, cancel := context.WithTimeout(a.ctx, lspTimeout)
 		defer cancel()
 		headings, err := client.Headings(ctx, doc)
 		a.publish(func() {
@@ -321,28 +316,4 @@ func (a *App) chooseHeading(i int) {
 	off := p.headings[i].Offset
 	s.ed.Select(off, off)
 	s.ed.GoTo(s.ed.Buffer.Pos(off))
-}
-
-// syncPreviewScroll 在光标所在行变化并停留后让预览跟过去。多处选区、文本还没同步给 tinymist
-// 时不发送，避免按过期的行号滚动。
-func (a *App) syncPreviewScroll(c *ui.Context, s *session) {
-	if s.previewTask == "" || len(s.ed.Selections()) != 1 {
-		return
-	}
-	if line := s.ed.CursorPos().Line; line != s.scrollLine {
-		s.scrollLine, s.scrollDue = line, c.Now().Add(scrollDelay)
-	}
-	if s.scrollDue.IsZero() {
-		return
-	}
-	if wait := s.scrollDue.Sub(c.Now()); wait > 0 {
-		c.After(wait)
-		return
-	}
-	if s.syncedVersion != s.observed {
-		return
-	}
-	s.scrollDue = time.Time{}
-	client, id, doc, off := a.lsp, s.previewTask, s.lspDocument(), s.ed.Cursor()
-	go client.ScrollPreview(id, doc, off)
 }

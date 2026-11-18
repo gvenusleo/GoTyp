@@ -21,7 +21,7 @@ func (cl *Client) OnDiagnostics(fn func(path string, doc *Document, diags []Diag
 	cl.onDiag = fn
 }
 
-// OnShowDocument 设置预览跳回源码的接收者：path 是绝对路径，at 是目标位置。
+// OnShowDocument 设置服务端请求跳到源码位置时的接收者：path 是绝对路径，at 是目标位置。
 // fn 在后台 goroutine 中调用。必须在第一次使用客户端之前设置。
 func (cl *Client) OnShowDocument(fn func(path string, at Position)) {
 	cl.onShow = fn
@@ -29,6 +29,8 @@ func (cl *Client) OnShowDocument(fn func(path string, at Position)) {
 
 func (cl *Client) notification(c *conn, method string, params json.RawMessage) {
 	switch method {
+	case "tinymist/compileStatus":
+		cl.compileStatus(c, params)
 	case "textDocument/publishDiagnostics":
 		cl.diagnostics(c, params)
 	case "window/showDocument":
@@ -76,7 +78,7 @@ func (cl *Client) diagnostics(c *conn, params json.RawMessage) {
 			continue
 		}
 		diag := Diagnostic{Start: d.Range.Start, End: d.Range.End, Error: d.Severity == 1, Message: d.Message}
-		// 预览任务的编译实例与主实例会对同一个文件各报一遍，合并后同一处错误出现两次。
+		// 同一条诊断只显示一次。
 		if !seen[diag] {
 			seen[diag] = true
 			diags = append(diags, diag)

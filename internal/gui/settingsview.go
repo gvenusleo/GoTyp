@@ -11,7 +11,6 @@ type settingsCategory struct {
 
 var settingsCategories = []settingsCategory{
 	{"外观", iconPalette, (*App).appearanceView},
-	{"预览", iconEye, (*App).previewSettingsView},
 }
 
 // settingsView 是设置面板：左侧是分类，右侧是当前分类的各项，右上角关闭。
@@ -94,14 +93,6 @@ func (a *App) appearanceView(c *ui.Context) {
 		fontBox(c, "代码字体", &s.codeFont, s.codeFonts, a.chooseFonts)
 	})
 	a.fontPreview(c)
-}
-
-// previewSettingsView 画「预览」：深色主题下是否给 Typst 预览调色。
-func (a *App) previewSettingsView(c *ui.Context) {
-	s := &a.settings
-	settingRow(c, "深色主题下给 Typst 预览调色", func() {
-		ui.Switch(c.Key("settings-recolor"), &s.recolor).Label("深色主题下给 Typst 预览调色").OnChange(a.choosePreview)
-	})
 }
 
 // themeSwitch 与文档头的模式分段同一种样式：浅色轨道，选中段浮起。

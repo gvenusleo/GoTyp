@@ -47,21 +47,17 @@ type session struct {
 	sourceVersion uint64
 	md            markdown.Options
 
-	// Typst 预览任务的状态，见 typstpreview.go。
-	syncedVersion   uint64             // 已交给同步队列的 buffer 版本
-	diagSnapshot    *tinymist.Document // 上次编辑器诊断使用的只读快照
-	syncDue         time.Time          // 编辑停顿后同步的时刻，零值表示还没安排
-	previewGen      uint64             // 启动或结束任务时加一，过期的启动结果据此丢弃
-	previewTask     string
-	previewURL      string
-	previewStop     chan struct{} // 关闭后不再等待任务所在进程退出
-	previewInvert   bool          // 任务启动时是否反转颜色
+	// Typst 预览快照的状态，见 typstpreview.go。
+	syncedVersion   uint64
+	diagSnapshot    *tinymist.Document
+	syncDue         time.Time
+	previewReady    bool
 	previewStarting bool
+	previewCancel   context.CancelFunc
 	previewErr      string
-	previewMissing  bool // 预览失败的原因是 tinymist 不可用
+	previewMissing  bool
 	previewErrOpen  bool
-	scrollLine      int       // 上次让预览滚到的光标行
-	scrollDue       time.Time // 光标停留后同步预览的时刻，零值表示没有待同步的移动
+	previewFiles    []string
 	formatting      bool
 
 	statsCache   textStats
@@ -71,6 +67,9 @@ type session struct {
 
 	// tinymist 补全与悬停的状态，见 complete.go。lspPath 为空表示未接入。
 	lspPath        string
+	lspID          uint64
+	lspContext     context.Context
+	lspCancel      context.CancelFunc
 	completeCancel context.CancelFunc
 	hoverCancel    context.CancelFunc
 }

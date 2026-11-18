@@ -2,74 +2,179 @@ package tinymist
 
 import (
 	"context"
+	"encoding/json/v2"
 	"errors"
-	"fmt"
+	"os"
+	"path/filepath"
+	"time"
 )
 
-// invertColors 反转版面而保留插图，照片和图表反转后会失真。
-const invertColors = `{"rest":"always","image":"never"}`
+// ErrCompile 表示当前快照编译失败，调用方应保留上次成功的预览。
+var ErrCompile = errors.New("Typst 编译失败")
 
-// Preview 是一个运行中的预览任务。Done 在承载它的 tinymist 进程退出时关闭，任务随之失效。
-type Preview struct {
-	ID   string
-	URL  string
-	Done <-chan struct{}
+// ErrDisconnected 表示编译进程意外断开，下一次同步可以重新启动它。
+var ErrDisconnected = errClosed
+
+// pdfWaiter 只对应一份快照，通知接收不需要获取客户端的同步锁。
+type pdfWaiter struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+	stop   func() bool
+	conn   *conn
+	path   string
+	dir    string
+	file   string
+	failed chan struct{}
 }
 
-// StartPreview 先把文档同步到 doc 的版本，再为它启动预览服务。服务只监听回环地址的随机端口，
-// 渲染 tinymist 内存中的文本，随后续的 didChange 增量刷新。invert 为真时反转页面颜色。
-func (cl *Client) StartPreview(ctx context.Context, doc Document, id string, invert bool) (Preview, error) {
-	// 主实例的预览会把主文件钉在这篇笔记上，结束任务后也不解除，之后切换的笔记就收不到诊断，
-	// 预览也退回磁盘内容。--not-primary 让每个任务用独立的编译实例，主实例只负责诊断和补全。
-	args := []string{"--task-id", id, "--data-plane-host", "127.0.0.1:0", "--not-primary", "--no-open"}
-	if invert {
-		args = append(args, "--invert-colors", invertColors)
+// OnPreview 接收自动生成的 PDF 或编译错误，doc 是产生它的确切快照。
+// fn 在后台调用，必须在首次使用客户端之前设置。
+func (cl *Client) OnPreview(fn func(doc Document, data []byte, err error)) {
+	cl.onPDF = fn
+}
+
+func (cl *Client) beginPDF(ctx context.Context, c *conn, doc Document, entry bool) (*pdfWaiter, error) {
+	if cl.onPDF == nil {
+		return nil, nil
 	}
-	args = append(args, doc.Path)
-	cl.mu.Lock()
-	c, err := cl.syncLocked(doc)
+	dir, err := os.MkdirTemp(cl.outDir, "preview-")
 	if err != nil {
-		cl.mu.Unlock()
-		return Preview{}, err
+		return nil, err
 	}
-	rid, ch, err := c.send("workspace/executeCommand", map[string]any{
-		"command": "tinymist.doStartPreview", "arguments": []any{args},
-	})
-	cl.mu.Unlock()
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	p := &pdfWaiter{
+		ctx: ctx, cancel: cancel, stop: context.AfterFunc(cl.ctx, cancel),
+		conn: c, path: doc.Path, dir: dir, file: filepath.Join(dir, "preview.pdf"),
+		failed: make(chan struct{}, 1),
+	}
+	cl.pdfWait.Store(p)
+	when := "onType"
+	if entry {
+		// 首次打开和外部资源刷新没有新的源码内容，使用主文件更新事件触发。
+		when = "script"
+	}
+	err = c.notify("workspace/didChangeConfiguration", map[string]any{"settings": map[string]any{
+		"exportPdf": when, "outputPath": filepath.Join(dir, "preview"),
+		"compileStatus": "enable", "semanticTokens": "disable", "formatterMode": "typstyle",
+	}})
 	if err != nil {
-		return Preview{}, err
+		cl.pdfWait.Store(nil)
+		p.close()
+		return nil, err
 	}
-	var res struct {
-		Port int `json:"staticServerPort"`
-	}
-	if err := c.wait(ctx, rid, ch, &res); err != nil {
-		if ctx.Err() != nil {
-			// 服务端可能已经启动了任务，没人接手就会一直占着端口。
-			go killPreview(c, id)
+	return p, nil
+}
+
+// waitPDF 只在有编译进行时检查输出；原子替换保证读到完整的一份 PDF。
+func (cl *Client) waitPDF(p *pdfWaiter) ([]byte, error) {
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-p.ctx.Done():
+			return nil, p.ctx.Err()
+		case <-p.conn.done:
+			return nil, ErrDisconnected
+		case <-p.failed:
+			return nil, ErrCompile
+		case <-ticker.C:
+			data, err := os.ReadFile(p.file)
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return data, err
 		}
-		return Preview{}, err
 	}
-	if res.Port <= 0 {
-		go killPreview(c, id)
-		return Preview{}, errors.New("tinymist 没有返回预览端口")
-	}
-	return Preview{ID: id, URL: fmt.Sprintf("http://127.0.0.1:%d/", res.Port), Done: c.done}, nil
 }
 
-// StopPreview 结束预览任务。进程已经退出时任务随之消失，什么也不做。
-func (cl *Client) StopPreview(id string) {
+func (cl *Client) finishPDF(c *conn, doc Document, p *pdfWaiter) error {
+	data, err := cl.waitPDF(p)
+	cl.pdfWait.Store(nil)
+	if err == nil || errors.Is(err, ErrCompile) {
+		value, _ := cl.docs.Load(doc.Path)
+		next := *value.(*docState)
+		next.pdf, next.pdfErr = data, err
+		cl.docs.Store(doc.Path, &next)
+		cl.onPDF(doc, data, err)
+		return nil
+	}
+	cl.onPDF(doc, nil, err)
+	// 中断的编译没有版本化完成通知，关闭旧连接才能隔离迟到的输出。
+	c.w.Close()
+	cl.conn = nil
+	cl.docs.Clear()
+	if !errors.Is(err, ErrDisconnected) {
+		cl.starts--
+	}
+	return err
+}
+
+func (p *pdfWaiter) close() {
+	p.stop()
+	p.cancel()
+	os.RemoveAll(p.dir)
+}
+
+func (cl *Client) compileStatus(c *conn, params []byte) {
+	p := cl.pdfWait.Load()
+	if p == nil || p.conn != c {
+		return
+	}
+	var status struct {
+		Path   string `json:"path"`
+		Status string `json:"status"`
+	}
+	if json.Unmarshal(params, &status) != nil || status.Status != "compileError" {
+		return
+	}
+	rel, err := filepath.Rel(cl.root, p.path)
+	if status.Path != p.path && (err != nil || filepath.ToSlash(status.Path) != "/"+filepath.ToSlash(rel)) {
+		return
+	}
+	select {
+	case p.failed <- struct{}{}:
+	default:
+	}
+}
+
+// Refresh 在外部资源变化后更新服务端的文件快照，并重新安排当前文档的自动预览。
+func (cl *Client) Refresh(ctx context.Context, doc Document, paths []string) error {
 	cl.mu.Lock()
-	c := cl.conn
-	cl.mu.Unlock()
-	if c != nil && !c.closed() {
-		killPreview(c, id)
+	defer cl.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
 	}
+	c, err := cl.connect()
+	if err != nil {
+		return err
+	}
+	changes, reset := previewFileChanges(paths)
+	if reset {
+		// 目录变化无法枚举受影响的缓存，重建文件环境后按需读取。
+		shutdown(ctx, c)
+		cl.conn, cl.starts = nil, 0
+		cl.docs.Clear()
+	} else if err := c.call(ctx, "tinymist/fsChange", changes, nil); err != nil {
+		return err
+	}
+	_, err = cl.syncLocked(ctx, doc, true)
+	return err
 }
 
-func killPreview(c *conn, id string) {
-	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer cancel()
-	c.call(ctx, "workspace/executeCommand", map[string]any{
-		"command": "tinymist.doKillPreview", "arguments": []any{id},
-	}, nil)
+func previewFileChanges(paths []string) (map[string]any, bool) {
+	removes := make([]string, 0, len(paths))
+	seen := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		if seen[path] {
+			continue
+		}
+		seen[path] = true
+		st, err := os.Stat(path)
+		if err != nil && !errors.Is(err, os.ErrNotExist) || err == nil && st.IsDir() {
+			return nil, true
+		}
+		// removes 清除 NotifyAccessModel 的缓存；下次编译只从磁盘读取实际依赖。
+		removes = append(removes, fileURI(path))
+	}
+	return map[string]any{"inserts": []any{}, "removes": removes, "isSync": false}, false
 }
