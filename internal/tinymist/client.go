@@ -65,8 +65,7 @@ type Client struct {
 	// 诊断接收不能等待发送时持有的 mu，否则大文档可能堵住 stdio 管道的两端。
 	docs sync.Map // string -> *docState，只替换，不改动已存入的快照
 	// outDir 是 tinymist 导出文件的临时目录，第一次启动进程时创建，Close 时删除。
-	outDir   string
-	exportMu sync.Mutex
+	outDir string
 }
 
 // New 返回仓库 root 的客户端，不启动进程。ctx 结束时进程随之结束。
@@ -125,7 +124,7 @@ func initialize(ctx context.Context, c *conn, root, outDir string) error {
 			},
 			"window": map[string]any{"showDocument": map[string]any{"support": true}},
 		},
-		// 预览按快照设置独立输出路径；手动导出直接返回 PDF 字节。
+		// 预览按快照设置独立输出路径。
 		"initializationOptions": map[string]any{
 			"exportPdf": "never", "outputPath": filepath.Join(outDir, "$name"),
 			"compileStatus":  "enable",

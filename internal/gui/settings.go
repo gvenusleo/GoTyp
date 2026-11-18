@@ -63,6 +63,7 @@ type settingsState struct {
 	gen      int
 	category int
 	theme    int
+	autosave bool
 	// 两个字体框显示的字体名，默认的显示为 defaultFont。
 	uiFont, codeFont string
 	// 字体框的选项，默认的在最前；系统字体读回之前只有默认的。
@@ -74,7 +75,7 @@ func (a *App) openSettings() {
 	ap := a.state.Appearance
 	*s = settingsState{
 		open: true, gen: s.gen + 1, category: s.category,
-		theme:  themeIndex(ap.Theme),
+		theme: themeIndex(ap.Theme), autosave: !a.state.DisableAutosave,
 		uiFont: fontLabel(ap.UIFont), codeFont: fontLabel(ap.CodeFont),
 		uiFonts: []string{defaultFont}, codeFonts: []string{defaultFont},
 	}

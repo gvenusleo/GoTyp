@@ -60,7 +60,7 @@ const (
 	iconFolderSize = 15
 	emptyIconSize  = 28
 	spinnerSize    = 10
-	unsavedDotSize = 6
+	unsavedDotSize = 4
 	modeTrackInset = 2
 	modeShadowY    = 1
 	modeShadowBlur = 2
