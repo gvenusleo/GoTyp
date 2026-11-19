@@ -42,20 +42,18 @@ func (a *App) typstPreviewView(c *ui.Context, s *session) {
 
 // diagnosticsView 是由状态栏展开的诊断面板，列出 tinymist 报告的全部错误和警告。
 func (a *App) diagnosticsView(c *ui.Context, s *session) {
-	text, errors := a.diagReport.text, a.diagReport.errors
+	text := a.diagReport.text
 	if text == "" || !s.previewErrOpen {
 		return
 	}
 	t := c.Theme()
-	color := t.Warning
-	if errors > 0 {
-		color = t.Danger
-	}
-	ui.Row(c.Key("typst-diagnostics")).Gap(t.Space(2)).Padding(t.Space(2), t.Space(2), t.Space(2), t.Space(4)).
-		AlignItems(ui.Start).Background(color.Alpha(bannerOpacity)).BorderWidth(0, 0, 1, 0).BorderColor(t.Border).
-		Transition(bannerMotion).Children(func() {
-		ui.Scroll(c).MaxHeight(diagnosticsHeight).Grow(1).MinWidth(0).Children(func() {
-			ui.Text(c, text).Font(codeFamily(a.state.Appearance.CodeFont)).FontSize(detailFontSize).TextColor(color).Selectable()
+	padY := t.Space(1)
+	ui.Row(c.Key("typst-diagnostics")).Gap(t.Space(2)).Padding(padY, t.Space(2), padY, t.Space(4)).
+		MinHeight(barButton+2*padY+1).MaxHeightPercent(diagnosticsHeightPercent).
+		AlignItems(ui.Start).Background(t.Background).
+		BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Clip().Transition(bannerMotion).Children(func() {
+		ui.Scroll(c).MaxHeight(diagnosticsHeight).AlignSelf(ui.Stretch).MinHeight(0).Grow(1).MinWidth(0).Children(func() {
+			ui.Text(c, text).Font(codeFamily(a.state.Appearance.CodeFont)).FontSize(detailFontSize).Selectable()
 		})
 		ghostButton(c, "复制", iconCopy).OnClick(func() {
 			a.services.WriteClipboard(text)

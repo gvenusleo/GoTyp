@@ -12,7 +12,7 @@ import (
 
 // statusBarView 是内容区底部的状态栏：左侧是诊断状态和后台活动，右侧是编辑位置和统计。
 // 保存状态由文件名旁的圆点和编辑区上方的提示行表达，不在这里重复。
-// 窄窗口下依次隐藏字数和位置，诊断计数始终保留。
+// 窄窗口下依次隐藏字数和位置，诊断计数始终保留。只显示预览时隐藏编辑器位置。
 func (a *App) statusBarView(c *ui.Context, s *session) {
 	t := c.Theme()
 	width := a.contentWidth(c)
@@ -29,7 +29,7 @@ func (a *App) statusBarView(c *ui.Context, s *session) {
 			a.compileStatus(c, s)
 		}
 		ui.Spacer(c)
-		if width >= statusPositionWidth {
+		if width >= statusPositionWidth && (s.kind == 0 || a.mode != modePreview) {
 			a.positionStatus(c, s)
 		}
 		if width >= statusStatsWidth {

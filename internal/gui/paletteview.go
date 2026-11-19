@@ -105,9 +105,11 @@ func paletteRow(c *ui.Context, id string, choose func()) ui.Element {
 	row.OnClick(choose)
 	row.Children(func() {
 		ui.Icon(c, svg).FontSize(iconSize).TextColor(t.TextMuted).Shrink(0)
-		ui.Text(c, path.Base(id)).FontSize(textSize).SingleLine().Ellipsis("…").MinWidth(0)
-		ui.Text(c, parentDir(id)).FontSize(detailFontSize).TextColor(t.TextMuted).
-			SingleLine().Ellipsis("…").Grow(1).MinWidth(0)
+		ui.Text(c, path.Base(id)).FontSize(textSize).SingleLine().Ellipsis("…").Grow(1).MinWidth(0)
+		if dir := parentDir(id); dir != "" {
+			ui.Text(c, dir).FontSize(detailFontSize).TextColor(t.TextMuted).
+				SingleLine().Ellipsis("…").Shrink(0).MaxWidthPercent(paletteDirWidthPercent)
+		}
 	})
 	return row
 }
