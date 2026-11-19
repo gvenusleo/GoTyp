@@ -19,13 +19,8 @@ func (a *App) settingsView(c *ui.Context) {
 	if !a.settings.open {
 		return
 	}
-	t := c.Theme()
-	width, height := c.Size()
-	ui.DialogBase(c, &a.settings.open, func(backdrop, panel ui.Element) {
-		backdrop.Background(backdropColor)
-		panel.Width(min(settingsWidth, width-2*emptyInset)).Height(min(settingsHeight, height-2*emptyInset)).
-			Radius(panelRound).Clip().Background(t.Background).Border(1, t.Border).
-			Shadow(0, 12, 32, 0, panelShadowColor).Label("设置")
+	ui.DialogBase(c.Key("settings-dialog"), &a.settings.open, func(backdrop, panel ui.Element) {
+		modalPanel(c, backdrop, panel).Width(settingsWidth).Height(settingsHeight).Clip().Label("设置")
 		ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
 			a.settingsNav(c)
 			a.settingsContent(c)

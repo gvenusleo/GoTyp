@@ -14,12 +14,10 @@ func (a *App) paletteView(c *ui.Context) {
 	if !a.palette.open || a.tree == nil {
 		return
 	}
-	t := c.Theme()
-	width, height := c.Size()
-	ui.DialogBase(c, &a.palette.open, func(backdrop, panel ui.Element) {
-		backdrop.Justify(ui.Start).Padding(paletteTop, 0, 0).Background(backdropColor)
-		panel.Width(min(paletteWidth, width-2*emptyInset)).Radius(panelRound).Clip().
-			Background(t.Background).Border(1, t.Border).Shadow(0, 12, 32, 0, panelShadowColor)
+	_, height := c.Size()
+	ui.DialogBase(c.Key("palette-dialog"), &a.palette.open, func(backdrop, panel ui.Element) {
+		backdrop.Justify(ui.Start).Padding(paletteTop, 0, 0)
+		modalPanel(c, backdrop, panel).Width(paletteWidth).Clip()
 		results := a.paletteResults()
 		input := a.paletteInput(c)
 		list, selected := a.paletteList(c, results, min(paletteHeight, height-paletteTop-90))

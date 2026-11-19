@@ -13,15 +13,17 @@ import (
 // 布局尺寸集中在这里；view 中的相对间距继续使用主题的 Space。
 const (
 	// headerHeight 是文档头与侧栏顶部的高度，红绿灯在其中垂直居中，见 app.go。
-	headerHeight      = 38
-	statusHeight      = 24
-	statusItemHeight  = 20
-	textWidth         = 720
-	previewInset      = 20
-	previewSideInset  = 28
-	emptyInset        = 24
-	diagnosticsHeight = 180
-	hoverHeight       = 320
+	headerHeight             = 38
+	statusHeight             = 24
+	statusItemHeight         = 20
+	textWidth                = 720
+	previewInset             = 20
+	previewSideInset         = 28
+	emptyInset               = 24
+	alertMessageWidth        = 168
+	diagnosticsHeight        = 180
+	diagnosticsHeightPercent = 40
+	hoverHeight              = 320
 
 	sidebarMin      = 180
 	sidebarMax      = 420
@@ -32,12 +34,12 @@ const (
 	vaultBadge      = 28
 
 	// 快速打开面板宽 paletteWidth，距窗口上沿 paletteTop，结果最高 paletteHeight，超出滚动。
-	paletteWidth  = 560
-	paletteHeight = 360
-	paletteTop    = 96
-	panelRound    = 12
-	dialogWidth   = 360
-	hintWidth     = 200
+	paletteWidth           = 560
+	paletteHeight          = 360
+	paletteTop             = 96
+	paletteDirWidthPercent = 35
+	dialogWidth            = 360
+	hintWidth              = 200
 
 	// 设置面板的尺寸：settingsPad 是内容与面板边缘的留白，settingsGap 是各项之间的间距，
 	// comboWidth 放得下大多数字体名。
@@ -78,12 +80,23 @@ const (
 )
 
 var (
-	modeShadowColor = ui.RGBA(0, 0, 0, 0.08)
-	pageShadowColor = ui.RGBA(0, 0, 0, 0.06)
-	// 浮层面板压暗背后的窗口，阴影比卡片重，看得出它浮在最上层。
+	modeShadowColor  = ui.RGBA(0, 0, 0, 0.08)
+	pageShadowColor  = ui.RGBA(0, 0, 0, 0.06)
 	backdropColor    = ui.RGBA(0, 0, 0, 0.25)
-	panelShadowColor = ui.RGBA(0, 0, 0, 0.25)
+	panelShadowColor = ui.RGBA(0, 0, 0, 0.18)
 )
+
+// overlayPanel 沿用 MyGo 字体下拉的圆角和单层阴影。
+func overlayPanel(panel ui.Element, t *ui.Theme) ui.Element {
+	return panel.Background(t.Background).Radius(t.Radius+2).
+		NoShadow().Shadow(0, 6, 20, 0, panelShadowColor)
+}
+
+func modalPanel(c *ui.Context, backdrop, panel ui.Element) ui.Element {
+	width, height := c.Size()
+	backdrop.Background(backdropColor)
+	return overlayPanel(panel, c.Theme()).MaxWidth(width - 2*emptyInset).MaxHeight(height - 2*emptyInset)
+}
 
 // toggleInset 是侧栏开关距窗口左边的距离：紧贴红绿灯右侧，侧栏展开和收起时位置不变。
 func toggleInset(c *ui.Context) float32 {

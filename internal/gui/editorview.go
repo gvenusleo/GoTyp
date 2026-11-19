@@ -8,6 +8,14 @@ import (
 func (a *App) editorView(c *ui.Context, s *session) {
 	s.ed.ReadOnly = a.busy || a.openingVault || a.closing || a.quitting
 	s.ed.Theme = a.themes.code
+	s.ed.RenderCompletions = func(c *ui.Context, panel ui.Element, m *editor.CompletionMenu) {
+		editor.DefaultCompletions(c, panel, m)
+		overlayPanel(panel, c.Theme())
+	}
+	s.ed.RenderHover = func(c *ui.Context, panel ui.Element, h *editor.HoverCard) {
+		editor.DefaultHover(c, panel, h)
+		overlayPanel(panel, c.Theme())
+	}
 	editor.View(c.Key(s.id), s.ed).Grow(1).FillWidth().AutoFocus()
 	// 编辑器自带 ⌘; 切换行号，这里把它的结果同步回应用设置，菜单勾选和工作区状态保持一致。
 	if on := s.ed.LineNumbers != editor.LineNumbersOff; on != a.lineNumbers {
