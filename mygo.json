@@ -5,6 +5,7 @@
   "main": "./cmd/gotyp",
   "out": "build",
   "macos": {
+    "signingIdentity": "FA69ED0C1AE020718C546994B3AB48450341180F",
     "infoPlist": {
       "CFBundleDevelopmentRegion": "zh-Hans",
       "CFBundleLocalizations": ["zh-Hans"]

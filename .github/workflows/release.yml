@@ -1,0 +1,62 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: 核对版本标签
+        run: test "$GITHUB_REF_NAME" = "v$(jq -er .version mygo.json)"
+      - name: 导入 macOS 签名证书
+        shell: bash
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          identity=$(jq -er '.macos.signingIdentity' mygo.json)
+          : "${MACOS_CERTIFICATE_P12:?未配置 macOS 签名证书}"
+          : "${MACOS_CERTIFICATE_PASSWORD:?未配置 macOS 签名证书密码}"
+          certificate=$(mktemp "$RUNNER_TEMP/certificate.XXXXXX")
+          trap 'rm -f "$certificate"' EXIT
+          printf '%s' "$MACOS_CERTIFICATE_P12" | base64 --decode > "$certificate"
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password=$(openssl rand -base64 24)
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$certificate" -k "$keychain" -f pkcs12 \
+            -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain"
+          security list-keychains -d user -s "$keychain" login.keychain
+          if ! security find-identity -v -p codesigning "$keychain" |
+            awk -v identity="$identity" '$2 == identity { found = 1 } END { exit !found }'; then
+            echo '找不到与 mygo.json 配置一致的有效签名身份' >&2
+            exit 1
+          fi
+      - name: 构建并验证 macOS 安装包
+        run: |
+          go tool mygo build -platform darwin/arm64
+          codesign --verify --deep --strict build/darwin-arm64/GoTyp.app
+      - name: 上传到草稿 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view "$GITHUB_REF_NAME" --json isDraft > /dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --draft --verify-tag --generate-notes
+          fi
+          test "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" = true
+          gh release upload "$GITHUB_REF_NAME" build/darwin-arm64/*.dmg --clobber
