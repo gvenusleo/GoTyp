@@ -29,7 +29,7 @@ func (a *App) configurePreview(s *session) {
 	s.md = markdown.Options{Extensions: parser.Default &^ (parser.ExtMentions | parser.ExtReferences)}
 	if a.vault != nil {
 		if name, err := a.vault.Resolve(s.id); err == nil {
-			s.md.LoadImage = markdown.FileImages(filepath.Dir(name))
+			s.md.LoadImage = markdownImages(a.ctx, filepath.Dir(name))
 		}
 	}
 	s.md.OnLink = func(dest string) { a.openMarkdownLink(s, dest) }
