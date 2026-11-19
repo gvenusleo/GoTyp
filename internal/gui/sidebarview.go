@@ -51,9 +51,9 @@ func (a *App) vaultButton(c *ui.Context) {
 				ui.Icon(c, iconFolder).FontSize(iconSize).TextColor(t.TextMuted)
 			})
 			ui.Column(c).Gap(1).Grow(1).MinWidth(0).Children(func() {
-				// 仓库名用正文色、不加粗，不抢文件树的视线；路径用次要文字色再淡一档。
+				// 仓库名用正文色，路径用次要文字色，便于区分同名仓库。
 				ui.Text(c, name).FontSize(textSize).SingleLine().Ellipsis("…").MinWidth(0)
-				ui.Text(c, shortPath(filepath.Dir(root))).FontSize(captionSize).TextColor(t.TextMuted.Alpha(0.7)).
+				ui.Text(c, shortPath(filepath.Dir(root))).FontSize(captionSize).TextColor(t.TextMuted).
 					SingleLine().Ellipsis("…").MinWidth(0)
 			})
 			ui.Icon(c, iconChevronsUpDown).FontSize(iconSize).TextColor(t.TextMuted)
