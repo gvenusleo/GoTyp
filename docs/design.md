@@ -116,7 +116,7 @@ Vault 是普通文件夹，GoTyp 不向其中写入任何自己的文件。应�
 
 ## Markdown 预览
 
-预览读取当前编辑快照，使用 `markdown.View` 默认组件，阅读宽度约 720 DIP 居中。版式接近 GitHub：一、二级标题下有横线，标题、段落和列表间距与 GitHub 相近，代码块无边框，表格隔行着色；链接仍用系统强调色。悬停文档沿用紧凑的 Markdown 主题。语法支持 GFM、脚注和 GitHub Alert；不解析 @提及和 #引用。数学公式暂不渲染，按 TeX 源码显示。本地图片通过 `markdown.FileImages` 按笔记目录解析，不下载远程图片。
+预览读取当前编辑快照，使用 `markdown.View` 默认组件，阅读宽度约 720 DIP 居中。版式接近 GitHub：一、二级标题下有横线，标题、段落和列表间距与 GitHub 相近，代码块无边框，表格隔行着色；链接仍用系统强调色。悬停文档沿用紧凑的 Markdown 主题。语法支持 GFM、脚注和 GitHub Alert；不解析 @提及和 #引用。数学公式暂不渲染，按 TeX 源码显示。独占段落的图片由 MyGo 在后台加载，支持相对路径、绝对路径、`file://` 和 HTTP(S) 地址。相对路径以笔记所在目录为准，加载期间或失败时显示替代文字。
 
 链接处理：页内锚点交给 Markdown 组件；Vault 内的笔记在 GoTyp 中打开；`http`、`https`、`mailto` 和 Vault 内其他文件交给系统打开；不存在、逃出 Vault 或无法识别的目标只提示错误。
 
@@ -148,7 +148,7 @@ MyGo 原生模块仍是实验性 API，升级后需核对生成绑定、视图�
 使用 `editor.State` 已有的钩子和显示能力，不自绘浮层。结果按笔记 ID 和 buffer 版本核对，过期即丢弃；坐标按「tinymist」一节换算。
 
 - 补全：前缀含非 ASCII 字符时不自动请求，`Ctrl+Space` 可主动请求。`textEdit` 起点须与编辑器起点一致，否则裁剪或丢弃；片段用 `editor.ParseSnippet` 解析；`Documentation` 只放第一段纯文本摘要；按 `sortText` 稳定排序；光标位置变化后丢弃
-- 悬停：结果用 `markdown.View` 显示
+- 悬停：结果用 `markdown.View` 显示，图片沿用 Markdown 预览的加载规则，相对路径以当前 Typst 笔记所在目录为准
 - 诊断：当前笔记的诊断经 `SetDiagnostics` 在编辑器中画波浪线，悬停显示内容，滚动条上有标记。tinymist 客户端在每次 `didOpen` 或 `didChange` 时记录不可变快照，所有编辑辅助请求共用这条同步路径；诊断到达时附上该快照，界面按它换算坐标和版本。tinymist 的诊断不带版本号，上一次编译的诊断晚于新的 `didChange` 到达时，位置仍可能短暂偏移。只有诊断内容和快照都未变化时才跳过编辑器更新，版本变化后的相同诊断要重新定位。切换笔记清空诊断后，被引入文件的同一条错误要重新显示；其他文件的诊断只在诊断面板中列出
 - 跳转定义：`OnDefinition`（`⌘` 点击或 `F12`）请求 `textDocument/definition`。目标在当前笔记时移动光标；在仓库内其他文件时按切换规则先保存，再打开并定位；在仓库外（如 Typst 包）时提示无法打开
 - 格式化：`textDocument/formatting`，使用 tinymist 内置的 typstyle，缩进与编辑器一致。只手动触发，不在保存时自动格式化；结果作为一次 `Buffer.Edit` 应用，可以整体撤销

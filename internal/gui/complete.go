@@ -240,7 +240,7 @@ func (a *App) finishHover(s *session, version uint64, h tinymist.Hover) bool {
 	if a.current != s || s.lspPath == "" || s.ed.Buffer.Version() != version {
 		return false
 	}
-	md := &markdown.Options{Theme: a.themes.md}
+	md := &markdown.Options{Theme: a.themes.md, LoadImage: markdownImages(a.ctx, filepath.Dir(s.lspPath))}
 	s.ed.ShowHover(h.Start, h.End, "", func(c *ui.Context) { hoverView(c, h.Markdown, md) })
 	return true
 }
