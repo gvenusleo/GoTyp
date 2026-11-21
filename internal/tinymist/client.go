@@ -52,8 +52,8 @@ type Client struct {
 	cancel  context.CancelFunc
 	root    string
 	launch  func(ctx context.Context, root, outDir string) (*conn, error)
-	onDiag  func(path string, doc *Document, diags []Diagnostic)
-	onShow  func(path string, at Position)
+	onDiag  func(session uint64, path string, doc *Document, diags []Diagnostic)
+	onShow  func(session uint64, path string, at Position)
 	onPDF   func(doc Document, data []byte, err error)
 	pdfWait atomic.Pointer[pdfWaiter]
 
@@ -166,7 +166,8 @@ func (cl *Client) connect() (*conn, error) {
 		return nil, err
 	}
 	// 诊断在 didOpen 之后才会到达，这时接收者已经就位。
-	c.handleNotes(func(method string, params json.RawMessage) { cl.notification(c, method, params) })
+	session := cl.session
+	c.handleNotes(func(method string, params json.RawMessage) { cl.notification(c, session, method, params) })
 	cl.conn = c
 	// 先接管主文件选择，避免首次 didOpen 的隐式聚焦与显式聚焦触发两次编译。
 	if err := focus(c, nil); err != nil {

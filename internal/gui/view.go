@@ -17,6 +17,12 @@ func (a *App) view(c *ui.Context) {
 		a.welcomeView(c)
 	} else {
 		a.workspaceView(c)
+		a.checkTabs()
+		for _, tab := range a.tabs {
+			if tab.session != nil {
+				a.observe(c, tab.session)
+			}
+		}
 	}
 	a.paletteView(c)
 	a.renameView(c)
@@ -26,11 +32,21 @@ func (a *App) view(c *ui.Context) {
 		c.Toast(a.toast)
 		a.toast = ""
 	}
+	if closeWindow := a.pendingClose; closeWindow != nil && !a.busy {
+		a.pendingClose = nil
+		a.publish(closeWindow)
+	}
 }
 
 // handleShortcuts 让测试和没有原生菜单的平台也能使用菜单栏中的快捷键。
 func (a *App) handleShortcuts(c *ui.Context) {
 	switch {
+	case !a.menuReady && c.Shortcut(ui.Ctrl|ui.Shift, ui.KeyTab):
+		a.stepTab(-1)
+	case !a.menuReady && c.Shortcut(ui.Ctrl, ui.KeyTab):
+		a.stepTab(1)
+	case !a.menuReady && c.Shortcut(ui.Cmd, ui.KeyW):
+		a.closeActiveTab()
 	case c.Shortcut(ui.Cmd, ui.Key1):
 		a.setMode(modeEdit)
 	case c.Shortcut(ui.Cmd, ui.Key2):
@@ -122,7 +138,6 @@ func (a *App) contentView(c *ui.Context) {
 			case a.mode == modeEdit || s.kind == 0:
 				a.editorView(c, s)
 			case a.mode == modePreview:
-				a.observe(c, s)
 				a.previewView(c, s)
 			default:
 				a.splitView(c, s)

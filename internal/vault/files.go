@@ -7,14 +7,15 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
 // ErrExists 表示目标名称已被占用。
 var ErrExists = errors.New("同名文件已存在")
 
-// CreateUntitled 在目录 dir 中创建一篇空笔记，名称重复时追加序号。
-func (v *Vault) CreateUntitled(dir string, kind Kind) (string, FileStat, error) {
+// CreateUntitled 在目录 dir 中创建一篇空笔记，跳过磁盘上已存在或被编辑会话占用的路径。
+func (v *Vault) CreateUntitled(dir string, kind Kind, reserved ...string) (string, FileStat, error) {
 	ext := ".md"
 	if kind == KindTypst {
 		ext = ".typ"
@@ -25,6 +26,9 @@ func (v *Vault) CreateUntitled(dir string, kind Kind) (string, FileStat, error) 
 			name = fmt.Sprintf("未命名 %d%s", i, ext)
 		}
 		id := path.Join(dir, name)
+		if slices.Contains(reserved, id) {
+			continue
+		}
 		st, err := v.Create(id)
 		if errors.Is(err, fs.ErrExist) {
 			continue

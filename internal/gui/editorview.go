@@ -6,7 +6,7 @@ import (
 )
 
 func (a *App) editorView(c *ui.Context, s *session) {
-	s.ed.ReadOnly = a.busy || a.openingVault || a.closing || a.quitting
+	s.ed.ReadOnly = a.busy
 	s.ed.Theme = a.themes.code
 	s.ed.RenderCompletions = func(c *ui.Context, panel ui.Element, m *editor.CompletionMenu) {
 		editor.DefaultCompletions(c, panel, m)
@@ -23,7 +23,6 @@ func (a *App) editorView(c *ui.Context, s *session) {
 		a.persistWorkspace()
 		a.refreshMenu()
 	}
-	a.observe(c, s)
 }
 
 // alertView 在编辑区上方常驻展示冲突与保存失败，提供就地操作，不自动消失。

@@ -10,7 +10,7 @@ import (
 
 // previewChanged 取消尚未安装的旧 PDF。
 func (a *App) previewChanged(s *session) {
-	if a.current != s || s.lspPath == "" {
+	if a.current != s || s.lspPath == "" || s.previewVersion == s.ed.Buffer.Version() {
 		return
 	}
 	if s.previewCancel != nil {
@@ -78,6 +78,7 @@ func (a *App) receivePDF(client *tinymist.Client, doc tinymist.Document, data []
 			s.previewStarting = !s.previewReady
 			return false
 		}
+		s.previewVersion = doc.Version
 		s.previewMissing = errors.Is(err, tinymist.ErrUnavailable)
 		s.previewErr = "无法更新 Typst 预览：" + err.Error()
 		a.refreshMenu()
@@ -91,6 +92,7 @@ func (a *App) receivePDF(client *tinymist.Client, doc tinymist.Document, data []
 	}
 	ctx, cancel := context.WithCancel(s.lspContext)
 	s.previewCancel = cancel
+	s.previewVersion = doc.Version
 	viewer := a.preview
 	go func() {
 		err := viewer.Load(ctx, data)
@@ -120,7 +122,7 @@ func (a *App) stopPreview(s *session) {
 		s.previewCancel()
 		s.previewCancel = nil
 	}
-	s.previewReady, s.previewStarting = false, false
+	s.previewReady, s.previewStarting, s.previewVersion = false, false, 0
 	if a.preview != nil {
 		a.preview.Clear()
 	}

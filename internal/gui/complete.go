@@ -32,11 +32,19 @@ const (
 func (a *App) startLSP(root string) {
 	a.stopLSP()
 	client := tinymist.New(a.ctx, root)
-	client.OnDiagnostics(func(path string, doc *tinymist.Document, diags []tinymist.Diagnostic) {
-		a.publish(func() { a.setDiagnostics(client, path, doc, diags) })
+	client.OnDiagnostics(func(activation uint64, path string, doc *tinymist.Document, diags []tinymist.Diagnostic) {
+		a.publish(func() {
+			if a.current != nil && a.current.lspID == activation {
+				a.setDiagnostics(client, path, doc, diags)
+			}
+		})
 	})
-	client.OnShowDocument(func(path string, at tinymist.Position) {
-		a.publish(func() { a.showDocument(client, path, at) })
+	client.OnShowDocument(func(activation uint64, path string, at tinymist.Position) {
+		a.publish(func() {
+			if a.current != nil && a.current.lspID == activation {
+				a.showDocument(client, path, at)
+			}
+		})
 	})
 	if a.preview != nil {
 		client.OnPreview(func(doc tinymist.Document, data []byte, err error) {
@@ -50,7 +58,8 @@ func (a *App) startLSP(root string) {
 // setDiagnostics 记录一个文件的诊断。被引入的文件也会报告，诊断面板一并列出。
 func (a *App) setDiagnostics(client *tinymist.Client, path string, doc *tinymist.Document, diags []tinymist.Diagnostic) {
 	s := a.current
-	if a.lsp != client || s == nil || s.lspPath == "" {
+	if a.lsp != client || s == nil || s.lspPath == "" ||
+		(doc != nil && doc.Session != s.lspID) {
 		return
 	}
 	// 文本版本变化后，相同的行列也要重新定位；通知携带的快照不会随排队期间的新编辑改变。
@@ -139,6 +148,9 @@ func (a *App) detachLSP(s *session) {
 		return
 	}
 	s.cancelLSP()
+	s.syncing, s.formatting = false, false
+	s.previewFiles = nil
+	s.ed.ShowCompletions(-1, nil)
 	s.ed.OnCompletion, s.ed.OnHover, s.ed.OnDefinition, s.ed.ContextMenu = nil, nil, nil, nil
 	s.ed.SetDiagnostics(s.ed.Buffer.Version(), nil)
 	s.diagSnapshot = nil
@@ -199,7 +211,11 @@ func (a *App) requestCompletion(s *session, r editor.CompletionRequest) {
 			return
 		}
 		list := completions(items, doc.Text, start, r.Offset)
-		a.publish(func() { a.finishCompletion(s, r.Version, r.Offset, start, list) })
+		a.publish(func() {
+			if ctx.Err() == nil && a.lsp == client && s.lspID == doc.Session {
+				a.finishCompletion(s, r.Version, r.Offset, start, list)
+			}
+		})
 	}()
 }
 
@@ -232,7 +248,11 @@ func (a *App) requestHover(s *session, r editor.HoverRequest) {
 		if h.Start < 0 {
 			h.Start, h.End = r.Offset, r.Offset
 		}
-		a.publish(func() { a.finishHover(s, r.Version, h) })
+		a.publish(func() {
+			if ctx.Err() == nil && a.lsp == client && s.lspID == doc.Session {
+				a.finishHover(s, r.Version, h)
+			}
+		})
 	}()
 }
 

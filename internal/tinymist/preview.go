@@ -144,10 +144,12 @@ func (cl *Client) Refresh(ctx context.Context, doc Document, paths []string) err
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	c, err := cl.connect()
-	if err != nil {
+	// 新连接会直接从磁盘读取依赖，只有当前会话的旧连接需要失效缓存。
+	if doc.Session != cl.session || cl.conn == nil || cl.conn.closed() {
+		_, err := cl.syncLocked(ctx, doc, true)
 		return err
 	}
+	c := cl.conn
 	changes, reset := previewFileChanges(paths)
 	if reset {
 		// 目录变化无法枚举受影响的缓存，重建文件环境后按需读取。
@@ -157,7 +159,7 @@ func (cl *Client) Refresh(ctx context.Context, doc Document, paths []string) err
 	} else if err := c.call(ctx, "tinymist/fsChange", changes, nil); err != nil {
 		return err
 	}
-	_, err = cl.syncLocked(ctx, doc, true)
+	_, err := cl.syncLocked(ctx, doc, true)
 	return err
 }
 

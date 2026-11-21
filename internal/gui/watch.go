@@ -3,6 +3,7 @@ package gui
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"path"
 	"path/filepath"
 	"slices"
@@ -67,30 +68,25 @@ func (a *App) filesChanged(v *vault.Vault, events []mygo.FileEvent) {
 		written = append(written, e.Path)
 	}
 	a.refreshTitles(written)
-	if vw := a.viewing; vw != nil {
+	for _, tab := range a.tabs {
 		for _, e := range events {
-			if e.Path == vw.id || e.OldPath == vw.id || e.Op == mygo.FileHint || affects(e.Path, vw.id) {
-				a.reloadViewer()
-				return
+			if e.Op == mygo.FileHint || affects(e.Path, tab.id) || affects(e.OldPath, tab.id) {
+				tab.changed = true
+				break
 			}
 		}
 	}
-	if s := a.current; s != nil {
+	if s := a.current; s != nil && s.lspPath != "" {
 		for _, e := range events {
-			if s.lspPath != "" && e.Path != s.id {
+			if e.Path != s.id {
 				s.previewFiles = append(s.previewFiles, filepath.Join(v.Root(), filepath.FromSlash(e.Path)))
 				if e.OldPath != "" {
 					s.previewFiles = append(s.previewFiles, filepath.Join(v.Root(), filepath.FromSlash(e.OldPath)))
 				}
 			}
 		}
-		for _, e := range events {
-			if e.Path == s.id || e.OldPath == s.id || e.Op == mygo.FileHint || affects(e.Path, s.id) {
-				a.checkCurrent()
-				return
-			}
-		}
 	}
+	a.checkTabs()
 }
 
 // refreshTitles 在后台重新读取被写入笔记的标题。
@@ -151,31 +147,87 @@ func (a *App) rescan() {
 	}()
 }
 
-// checkCurrent 核对当前笔记的磁盘版本：没有未保存编辑就静默重新加载，否则进入冲突状态。
-// 自己的保存会更新记录的文件状态，因此不会被误判为外部修改。
-func (a *App) checkCurrent() {
-	s, v := a.current, a.vault
-	if s == nil || v == nil || s.saving || s.conflict {
+// checkTabs 及时核对有未保存编辑的后台标签。干净的后台标签等激活后再读。
+func (a *App) checkTabs() {
+	if a.vault == nil || a.busy {
 		return
 	}
-	expected := s.stat
+	for _, tab := range a.tabs {
+		s := tab.session
+		if !tab.loaded() || !tab.changed || tab.checking ||
+			(s != nil && (s.saving || s.conflict)) || (tab != a.activeTab && !s.dirty()) {
+			continue
+		}
+		a.checkTab(tab)
+	}
+}
+
+func (a *App) checkTab(tab *fileTab) {
+	v, id, s, vw := a.vault, tab.id, tab.session, tab.viewer
+	var expected vault.FileStat
+	var version uint64
+	clean := !s.dirty()
+	if s != nil {
+		expected, version = s.stat, s.ed.Buffer.Version()
+	}
+	tab.changed, tab.checking = false, true
 	go func() {
-		err := v.Check(s.id, expected)
+		var err error
+		if s != nil {
+			err = v.Check(id, expected)
+		}
+		changed := s == nil || err != nil
+		var source string
+		var stat vault.FileStat
+		var next *viewer
+		if changed && clean && !fileDeleted(err) {
+			source, stat, next, err = readFile(v, id)
+		}
 		a.publish(func() {
-			if a.current != s || a.vault != v || s.saving || s.stat != expected {
+			if v != a.vault || a.findTab(id) != tab || tab.session != s || tab.viewer != vw {
 				return
 			}
-			deleted := errors.Is(err, vault.ErrDeleted)
-			switch {
-			case err == nil:
-			case !s.dirty() && deleted:
-				a.closeSession()
-			case !s.dirty():
-				a.reloadCurrent()
-			default:
-				s.conflict, s.deleted = true, deleted
-				s.err = err.Error()
+			tab.checking = false
+			if a.busy || tab.changed || (s != nil && (s.saving || s.stat != expected)) {
+				tab.changed = true
+				return
+			}
+			if changed {
+				a.applyFileChange(tab, clean, version, source, stat, next, err)
 			}
 		})
 	}()
+}
+
+func fileDeleted(err error) bool {
+	return errors.Is(err, vault.ErrDeleted) || errors.Is(err, fs.ErrNotExist)
+}
+
+func (a *App) applyFileChange(tab *fileTab, read bool, version uint64, source string, stat vault.FileStat, vw *viewer, err error) {
+	s := tab.session
+	switch {
+	case s.dirty():
+		s.conflict, s.deleted = true, fileDeleted(err)
+		s.err = vault.ErrConflict.Error()
+		if s.deleted {
+			s.err = vault.ErrDeleted.Error()
+		}
+	case s != nil && (!read || s.ed.Buffer.Version() != version):
+		tab.changed = true
+	case fileDeleted(err):
+		a.removeTabs(func(other *fileTab) bool { return other == tab })
+	case err != nil:
+		a.notify("无法重新读取「" + path.Base(tab.id) + "」：" + err.Error())
+	case s != nil && vw == nil:
+		a.replaceSource(s, source, stat)
+	default:
+		tab.viewer = vw
+		tab.session = nil
+		if vw == nil {
+			tab.session = newSession(tab.id, source, stat)
+		}
+		if tab == a.activeTab {
+			a.activateTab(tab)
+		}
+	}
 }

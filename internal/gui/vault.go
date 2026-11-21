@@ -1,6 +1,10 @@
 package gui
 
 import (
+	"errors"
+	"io/fs"
+	"slices"
+
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
@@ -25,7 +29,7 @@ func (a *App) openVault(root string) {
 	if a.openingVault || a.busy || (a.vault != nil && a.vault.Root() == root) {
 		return
 	}
-	a.switchAfterSave(func() { a.startOpenVault(root) })
+	a.afterSaving(a.sessionsUnder(""), false, func() { a.startOpenVault(root) })
 }
 
 func (a *App) startOpenVault(root string) {
@@ -62,6 +66,10 @@ func (a *App) useVault(v *vault.Vault, tree *vault.Tree) {
 	a.detachLSP(a.current)
 	a.startLSP(v.Root())
 	a.vault, a.tree, a.current, a.viewing = v, tree, nil, nil
+	a.tabs, a.activeTab = nil, nil
+	a.tabIndex, a.revealTab = 0, false
+	a.tabScroll.X = 0
+	a.focus = false
 	a.selectedRow = -1
 	a.outline = ui.OutlineState[string]{}
 	a.chosen = ui.Selection[string]{}
@@ -72,20 +80,7 @@ func (a *App) useVault(v *vault.Vault, tree *vault.Tree) {
 	a.watch(v)
 	a.syncWindow()
 	a.refreshMenu()
-	// 上次的文件不在了就打开第一篇笔记；仓库里没有笔记时什么也不打开。
-	selected := w.Selected
-	if !tree.Files[selected] {
-		selected = ""
-		for _, id := range files(tree) {
-			if _, ok := tree.Titles[id]; ok {
-				selected = id
-				break
-			}
-		}
-	}
-	if selected != "" {
-		a.loadSession(selected)
-	}
+	a.restoreTabs(w)
 }
 
 func (a *App) applyWorkspace(w vault.Workspace) {
@@ -120,14 +115,6 @@ func (a *App) openSelected() {
 	a.openNote(id)
 }
 
-// openNote 保存当前笔记后切换到文件 id，笔记、纯文本、图片和其他文件都从这里打开。
-func (a *App) openNote(id string) {
-	if a.busy || a.openID() == id {
-		return
-	}
-	a.switchAfterSave(func() { a.loadSession(id) })
-}
-
 func (a *App) loadSession(id string) {
 	if a.vault == nil {
 		return
@@ -148,7 +135,18 @@ func (a *App) loadSession(id string) {
 			case err != nil:
 				// 跳转只对这次打开有效，失败后不能留到以后手动打开同一篇笔记时才生效。
 				a.pendingJump = nil
+				a.tabIndex = max(0, slices.Index(a.tabs, a.activeTab))
+				a.syncSelection()
 				a.err = "无法打开文件：" + err.Error()
+				if a.activeTab != nil {
+					a.notify(a.err)
+				}
+				if errors.Is(err, fs.ErrNotExist) {
+					a.removeTabs(func(tab *fileTab) bool { return tab.id == id })
+					if a.activeTab == nil && len(a.tabs) > 0 {
+						a.openNote(a.tabs[0].id)
+					}
+				}
 			case vw != nil:
 				a.pendingJump = nil
 				a.showViewer(vw)
@@ -159,46 +157,21 @@ func (a *App) loadSession(id string) {
 	}()
 }
 
-// showSession 把新会话设为当前笔记，并同步侧栏选中、窗口标题和工作区状态。
-func (a *App) showSession(s *session) {
-	a.stopPreview(a.current)
-	a.detachLSP(a.current)
-	a.current, a.viewing = s, nil
-	a.configurePreview(s)
-	a.attachLSP(s)
-	a.applyEditorPrefs(s)
-	a.chosen.Clear()
-	a.chosen.Add(s.id)
-	a.revealInOutline(s.id)
-	a.syncWindow()
-	a.previewChanged(s)
-	a.applyPendingJump(s)
-	a.persistWorkspace()
-	a.refreshMenu()
-}
-
-// closeSession 在当前笔记被删除后回到空白内容区。
-func (a *App) closeSession() {
-	a.stopPreview(a.current)
-	a.detachLSP(a.current)
-	a.current, a.viewing = nil, nil
-	a.focus = false
-	a.chosen.Clear()
-	a.syncWindow()
-	a.persistWorkspace()
-}
-
 func (a *App) persistWorkspace() {
 	if a.vault == nil {
 		return
 	}
 	w := vault.Workspace{
+		Tabs:         make([]string, 0, len(a.tabs)),
+		Selected:     a.openID(),
 		Mode:         modeNames[a.mode],
 		SidebarWidth: a.sidebarWidth, EditorPercent: a.editorPercent,
 		HideLineNumbers: !a.lineNumbers, SidebarHidden: a.sidebarHidden,
 	}
-	w.Selected = a.openID()
-	if a.state.Workspaces[a.vault.Root()] == w {
+	for _, tab := range a.tabs {
+		w.Tabs = append(w.Tabs, tab.id)
+	}
+	if w.Equal(a.state.Workspaces[a.vault.Root()]) {
 		return
 	}
 	a.state.SetWorkspace(a.vault.Root(), w)
@@ -226,6 +199,9 @@ func (a *App) saveState() {
 			if a.statePending {
 				a.statePending = false
 				a.saveState()
+			} else if done := a.stateFlushed; done != nil {
+				a.stateFlushed = nil
+				done()
 			}
 		})
 	}()

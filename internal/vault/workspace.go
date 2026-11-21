@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,13 +16,23 @@ const maxRecent = 8
 
 // Workspace 是一个仓库的界面状态，不包含笔记正文。
 type Workspace struct {
-	Selected      string  `json:"selected,omitempty"`
-	Mode          string  `json:"mode,omitempty"`
-	SidebarWidth  float32 `json:"sidebarWidth,omitempty"`
-	EditorPercent float32 `json:"editorPercent,omitempty"`
+	// nil 表示旧版状态。空列表表示用户已经关闭所有标签。
+	Tabs          []string `json:"tabs,omitzero"`
+	Selected      string   `json:"selected,omitempty"`
+	Mode          string   `json:"mode,omitempty"`
+	SidebarWidth  float32  `json:"sidebarWidth,omitempty"`
+	EditorPercent float32  `json:"editorPercent,omitempty"`
 	// HideLineNumbers 记录用户关闭了行号，零值表示默认显示。
 	HideLineNumbers bool `json:"hideLineNumbers,omitempty"`
 	SidebarHidden   bool `json:"sidebarHidden,omitempty"`
+}
+
+// Equal 比较工作区状态，并区分旧版缺少标签列表与显式空列表。
+func (w Workspace) Equal(other Workspace) bool {
+	return (w.Tabs == nil) == (other.Tabs == nil) && slices.Equal(w.Tabs, other.Tabs) &&
+		w.Selected == other.Selected && w.Mode == other.Mode && w.SidebarWidth == other.SidebarWidth &&
+		w.EditorPercent == other.EditorPercent && w.HideLineNumbers == other.HideLineNumbers &&
+		w.SidebarHidden == other.SidebarHidden
 }
 
 // Appearance 是与仓库无关的外观设置。零值表示主题跟随系统，字体用系统的。
@@ -63,9 +74,10 @@ func (s *State) SetWorkspace(root string, w Workspace) {
 func (s State) Clone() State {
 	out := s
 	out.Recent = slices.Clone(s.Recent)
-	out.Workspaces = make(map[string]Workspace, len(s.Workspaces))
-	for k, v := range s.Workspaces {
-		out.Workspaces[k] = v
+	out.Workspaces = maps.Clone(s.Workspaces)
+	for root, w := range out.Workspaces {
+		w.Tabs = slices.Clone(w.Tabs)
+		out.Workspaces[root] = w
 	}
 	return out
 }

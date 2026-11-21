@@ -301,7 +301,7 @@ func TestExportFromDisk(t *testing.T) {
 func TestDiagnosticsCarrySyncedSnapshot(t *testing.T) {
 	cl, f := startFake(t)
 	got := make(chan *Document, 4)
-	cl.OnDiagnostics(func(_ string, doc *Document, _ []Diagnostic) { got <- doc })
+	cl.OnDiagnostics(func(_ uint64, _ string, doc *Document, _ []Diagnostic) { got <- doc })
 	doc := Document{Path: "/v/a.typ", Text: "#foo\n", Version: 1}
 	if err := cl.Open(doc); err != nil {
 		t.Fatal(err)
@@ -340,9 +340,14 @@ func TestDiagnosticsCarrySyncedSnapshot(t *testing.T) {
 // 切换笔记清空界面后，被引入文件的同一条错误必须再次显示。
 func TestRepeatedDiagnosticsAreDelivered(t *testing.T) {
 	cl, f := startFake(t)
-	got := make(chan int, 4)
-	cl.OnDiagnostics(func(path string, doc *Document, diags []Diagnostic) { got <- len(diags) })
-	if err := cl.Open(Document{Path: "/v/a.typ", Text: "= A", Version: 1}); err != nil {
+	got := make(chan uint64, 4)
+	cl.OnDiagnostics(func(activation uint64, _ string, _ *Document, diags []Diagnostic) {
+		if len(diags) == 1 {
+			got <- activation
+		}
+	})
+	const activation = 7
+	if err := cl.Open(Document{Path: "/v/a.typ", Text: "= A", Version: 1, Session: activation}); err != nil {
 		t.Fatal(err)
 	}
 	f.next(t, "textDocument/didOpen")
@@ -351,9 +356,9 @@ func TestRepeatedDiagnosticsAreDelivered(t *testing.T) {
 	f.notify("textDocument/publishDiagnostics", note)
 	for i := range 2 {
 		select {
-		case n := <-got:
-			if n != 1 {
-				t.Fatalf("诊断条数 = %d，期望 1", n)
+		case got := <-got:
+			if got != activation {
+				t.Fatalf("诊断会话 = %d，期望 %d", got, activation)
 			}
 		case <-time.After(5 * time.Second):
 			t.Fatalf("第 %d 次诊断没有送达", i+1)

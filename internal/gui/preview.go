@@ -27,9 +27,14 @@ const exportTimeout = 2 * time.Minute
 func (a *App) configurePreview(s *session) {
 	// 本地笔记不关联 GitHub 仓库，@用户名和 #123 无处可链，按普通文字显示。
 	s.md = markdown.Options{Extensions: parser.Default &^ (parser.ExtMentions | parser.ExtReferences)}
-	if a.vault != nil {
-		if name, err := a.vault.Resolve(s.id); err == nil {
-			s.md.LoadImage = markdownImages(a.ctx, filepath.Dir(name))
+	if v := a.vault; v != nil {
+		ctx, id := a.ctx, s.id
+		s.md.LoadImage = func(dest string) (ui.ImageSource, error) {
+			name, err := v.Resolve(id)
+			if err != nil {
+				return nil, err
+			}
+			return markdownImages(ctx, filepath.Dir(name))(dest)
 		}
 	}
 	s.md.OnLink = func(dest string) { a.openMarkdownLink(s, dest) }

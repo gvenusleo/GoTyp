@@ -17,7 +17,7 @@ func (a *App) previewView(c *ui.Context, s *session) {
 
 // markdownPreviewView 把预览限制在阅读宽度内并居中。
 func (a *App) markdownPreviewView(c *ui.Context, s *session) {
-	ui.Scroll(c).Grow(1).Padding(previewInset, previewSideInset).Label("Markdown 预览").Children(func() {
+	ui.Scroll(c.Key(s.id)).TrackScroll(&s.mdScroll).Grow(1).Padding(previewInset, previewSideInset).Label("Markdown 预览").Children(func() {
 		ui.Row(c).FillWidth().Justify(ui.Center).Children(func() {
 			ui.Column(c).MaxWidth(textWidth).FillWidth().Children(func() {
 				s.md.Theme = a.themes.preview

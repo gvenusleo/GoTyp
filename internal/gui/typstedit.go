@@ -36,7 +36,7 @@ type symbolRenameState struct {
 // typstReady 报告当前笔记能否使用 tinymist 的编辑命令。
 func (a *App) typstReady() bool {
 	s := a.current
-	return s != nil && s.lspPath != "" && a.lsp != nil && !s.previewMissing
+	return !a.busy && s != nil && s.lspPath != "" && a.lsp != nil && !s.previewMissing
 }
 
 // typstContextMenu 把 Typst 编辑命令加到编辑器的右键菜单末尾。
@@ -90,7 +90,7 @@ func (a *App) definitionAtCursor() {
 
 func (a *App) requestDefinition(s *session, offset int) {
 	client := a.lsp
-	if client == nil || a.current != s || s.lspPath == "" {
+	if a.busy || client == nil || a.current != s || s.lspPath == "" {
 		return
 	}
 	doc := s.lspDocument()
@@ -99,7 +99,7 @@ func (a *App) requestDefinition(s *session, offset int) {
 		defer cancel()
 		loc, ok, err := client.Definition(ctx, doc, offset)
 		a.publish(func() {
-			if a.current != s || s.ed.Buffer.Version() != doc.Version {
+			if a.busy || a.current != s || a.lsp != client || s.lspID != doc.Session || s.ed.Buffer.Version() != doc.Version {
 				return
 			}
 			switch {
@@ -114,7 +114,7 @@ func (a *App) requestDefinition(s *session, offset int) {
 	}()
 }
 
-// jumpTo 移到 loc：当前笔记内直接移动光标，仓库内其他文件先按切换规则保存再打开。
+// jumpTo 移到 loc，必要时打开或激活目标文件的标签。
 func (a *App) jumpTo(s *session, loc tinymist.Location) {
 	if loc.Path == s.lspPath {
 		a.moveCursor(s, loc.At)
@@ -195,8 +195,11 @@ func (a *App) formatCurrent() {
 		defer cancel()
 		edits, err := client.Format(ctx, doc, tab)
 		a.publish(func() {
+			if a.current != s || a.lsp != client || s.lspID != doc.Session {
+				return
+			}
 			s.formatting = false
-			if a.current != s {
+			if a.busy {
 				return
 			}
 			switch {
@@ -234,7 +237,7 @@ func (a *App) startSymbolRename() {
 		defer cancel()
 		_, _, name, ok, err := client.PrepareRename(ctx, doc, offset)
 		a.publish(func() {
-			if a.current != s || s.ed.Buffer.Version() != doc.Version {
+			if a.busy || a.current != s || a.lsp != client || s.lspID != doc.Session || s.ed.Buffer.Version() != doc.Version {
 				return
 			}
 			if err != nil || !ok {
@@ -252,7 +255,7 @@ func (a *App) commitSymbolRename() {
 	a.symbolRename = symbolRenameState{}
 	name := strings.TrimSpace(r.name)
 	s, client := r.s, a.lsp
-	if name == "" || client == nil || a.current != s || s.ed.Buffer.Version() != r.version {
+	if a.busy || name == "" || client == nil || a.current != s || s.ed.Buffer.Version() != r.version {
 		return
 	}
 	doc := s.lspDocument()
@@ -261,7 +264,7 @@ func (a *App) commitSymbolRename() {
 		defer cancel()
 		edits, err := client.Rename(ctx, doc, r.offset, name)
 		a.publish(func() {
-			if a.current != s {
+			if a.busy || a.current != s || a.lsp != client || s.lspID != doc.Session {
 				return
 			}
 			switch {
@@ -290,7 +293,7 @@ func (a *App) openHeadings() {
 		defer cancel()
 		headings, err := client.Headings(ctx, doc)
 		a.publish(func() {
-			if a.current != s || s.ed.Buffer.Version() != doc.Version {
+			if a.busy || a.current != s || a.lsp != client || s.lspID != doc.Session || s.ed.Buffer.Version() != doc.Version {
 				return
 			}
 			if err != nil {
