@@ -35,6 +35,7 @@ type App struct {
 	state        vault.State
 	stateSaving  bool
 	statePending bool
+	stateFlushed func()
 
 	vault       *vault.Vault
 	tree        *vault.Tree
@@ -68,6 +69,11 @@ type App struct {
 	sidebarHidden bool
 	mode          int
 	lineNumbers   bool
+	tabs          []*fileTab
+	activeTab     *fileTab
+	tabIndex      int // MyGo 的标签选择索引，活动文件由 activeTab 决定。
+	revealTab     bool
+	tabScroll     ui.ScrollState
 	current       *session
 	// viewing 是当前打开的图片或无法以文本打开的文件，与 current 至多一个不为空。
 	viewing *viewer
@@ -78,12 +84,11 @@ type App struct {
 	// busy 表示正在切换、加载或改动文件，期间不能开始新的切换。
 	busy         bool
 	openingVault bool
-	closing      bool
-	quitting     bool
-	// discarding 表示用户已确认放弃无法保存的修改，关闭和退出不再拦截。
-	discarding bool
-	generation uint64
-	menuReady  bool
+	allowClose   bool
+	pendingClose func()
+	transition   *saveTransition
+	generation   uint64
+	menuReady    bool
 
 	palette  paletteState
 	rename   renameState
@@ -177,7 +182,8 @@ func (a *App) setMenu() {
 			{Label: "在文件管理器中显示", Click: action(a.revealCurrent)},
 			{Label: "复制路径", Accelerator: "CmdOrCtrl+Shift+C", Click: action(a.copyCurrentPath)},
 			mygo.Separator(),
-			{Role: mygo.RoleClose},
+			{Label: "关闭标签页", Accelerator: "CmdOrCtrl+W", Disabled: a.activeTab == nil, Click: action(a.closeActiveTab)},
+			{Label: "关闭窗口", Role: mygo.RoleClose, Accelerator: "CmdOrCtrl+Shift+W"},
 		}},
 		a.editMenu(action),
 		{Label: "视图", Submenu: []*mygo.MenuItem{
@@ -191,7 +197,15 @@ func (a *App) setMenu() {
 			mygo.Separator(),
 			{Role: mygo.RoleToggleFullScreen},
 		}},
-		{Role: mygo.RoleWindowMenu},
+		{Role: mygo.RoleWindowMenu, Submenu: []*mygo.MenuItem{
+			{Label: "下一个标签页", Accelerator: "Ctrl+Tab", Disabled: len(a.tabs) < 2, Click: action(func() { a.stepTab(1) })},
+			{Label: "上一个标签页", Accelerator: "Ctrl+Shift+Tab", Disabled: len(a.tabs) < 2, Click: action(func() { a.stepTab(-1) })},
+			mygo.Separator(),
+			{Role: mygo.RoleMinimize},
+			{Role: mygo.RoleZoom},
+			mygo.Separator(),
+			{Role: mygo.RoleFront},
+		}},
 	}))
 }
 
@@ -284,28 +298,45 @@ func (a *App) notify(message string) {
 }
 
 func (a *App) beforeClose(e *mygo.CloseEvent) {
-	if a.discarding || a.current == nil || (!a.current.dirty() && !a.current.saving) {
-		return
+	if a.prepareClose(func() { a.win.Close() }) {
+		e.PreventDefault()
 	}
-	e.PreventDefault()
-	if a.closing || a.quitting {
-		return
-	}
-	a.closing = true
-	a.switchAfterSave(func() {
-		a.closing = false
-		a.win.Close()
-	})
 }
 
 func (a *App) beforeQuit(e *mygo.QuitEvent) {
-	if a.discarding || a.current == nil || (!a.current.dirty() && !a.current.saving) {
-		return
+	if a.prepareClose(mygo.App.Quit) {
+		e.PreventDefault()
 	}
-	e.PreventDefault()
-	if a.closing || a.quitting {
-		return
+}
+
+// prepareClose 返回是否需要延迟关闭，直到源码和工作区状态都写完。
+func (a *App) prepareClose(closeWindow func()) bool {
+	if a.allowClose {
+		return false
 	}
-	a.quitting = true
-	a.switchAfterSave(func() { mygo.App.Quit() })
+	if a.busy {
+		if a.transition == nil && a.stateFlushed == nil {
+			a.pendingClose = closeWindow
+		}
+		return true
+	}
+	sessions := a.sessionsUnder("")
+	if len(sessions) == 0 && !a.stateSaving {
+		return false
+	}
+	a.afterSaving(sessions, true, func() {
+		finish := func() {
+			a.allowClose = true
+			closeWindow()
+		}
+		if a.stateSaving {
+			a.busy = true
+			a.stateFlushed = finish
+			return
+		}
+		// OnClose 和 OnBeforeQuit 返回后才能再次触发关闭。
+		a.busy = true
+		a.publish(finish)
+	})
+	return true
 }

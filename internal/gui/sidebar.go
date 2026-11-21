@@ -20,12 +20,13 @@ func clampSidebar(w, window float32) float32 {
 func (a *App) syncSelection() {
 	a.chosen.Clear()
 	a.selectedRow = -1
-	if a.current == nil {
+	id := a.openID()
+	if id == "" {
 		return
 	}
-	a.chosen.Add(a.current.id)
+	a.chosen.Add(id)
 	for row := range a.outline.Rows() {
-		if a.outline.Item(row) == a.current.id {
+		if a.outline.Item(row) == id {
 			a.selectedRow = row
 			return
 		}

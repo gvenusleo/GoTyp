@@ -14,25 +14,26 @@ type Diagnostic struct {
 	Message    string
 }
 
-// OnDiagnostics 设置诊断的接收者：path 是绝对路径，diags 是这个文件当前的全部诊断，为空表示已清除。
+// OnDiagnostics 设置诊断的接收者。session 是发出通知的连接所服务的编辑会话。
+// path 是绝对路径，diags 是该文件的全部诊断，为空表示已清除。
 // doc 是通知到达时已同步的只读快照，未打开的依赖文件为 nil；服务端不带版本号，仍可能发来旧编译的诊断。
 // fn 在后台 goroutine 中按服务端发送的顺序调用。必须在第一次使用客户端之前设置。
-func (cl *Client) OnDiagnostics(fn func(path string, doc *Document, diags []Diagnostic)) {
+func (cl *Client) OnDiagnostics(fn func(session uint64, path string, doc *Document, diags []Diagnostic)) {
 	cl.onDiag = fn
 }
 
-// OnShowDocument 设置服务端请求跳到源码位置时的接收者：path 是绝对路径，at 是目标位置。
+// OnShowDocument 设置源码跳转的接收者。session 标识连接所属的会话，path 是绝对路径。
 // fn 在后台 goroutine 中调用。必须在第一次使用客户端之前设置。
-func (cl *Client) OnShowDocument(fn func(path string, at Position)) {
+func (cl *Client) OnShowDocument(fn func(session uint64, path string, at Position)) {
 	cl.onShow = fn
 }
 
-func (cl *Client) notification(c *conn, method string, params json.RawMessage) {
+func (cl *Client) notification(c *conn, session uint64, method string, params json.RawMessage) {
 	switch method {
 	case "tinymist/compileStatus":
 		cl.compileStatus(c, params)
 	case "textDocument/publishDiagnostics":
-		cl.diagnostics(c, params)
+		cl.diagnostics(c, session, params)
 	case "window/showDocument":
 		var p struct {
 			URI       string    `json:"uri"`
@@ -46,12 +47,12 @@ func (cl *Client) notification(c *conn, method string, params json.RawMessage) {
 			at = p.Selection.Start
 		}
 		if path := uriPath(p.URI); path != "" {
-			cl.onShow(path, at)
+			cl.onShow(session, path, at)
 		}
 	}
 }
 
-func (cl *Client) diagnostics(c *conn, params json.RawMessage) {
+func (cl *Client) diagnostics(c *conn, session uint64, params json.RawMessage) {
 	if cl.onDiag == nil {
 		return
 	}
@@ -92,7 +93,7 @@ func (cl *Client) diagnostics(c *conn, params json.RawMessage) {
 			doc = &st.doc
 		}
 	}
-	cl.onDiag(path, doc, diags)
+	cl.onDiag(session, path, doc, diags)
 }
 
 // uriPath 把 file URI 换回绝对路径，与 fileURI 相反。

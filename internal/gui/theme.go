@@ -14,6 +14,16 @@ import (
 const (
 	// headerHeight 是文档头与侧栏顶部的高度，红绿灯在其中垂直居中，见 app.go。
 	headerHeight             = 38
+	tabHeight                = 26
+	tabTextWidth             = 156
+	tabDirectoryWidth        = 64
+	tabLabelInset            = 7
+	tabToolsGap              = 8
+	tabCloseSize             = 18
+	tabCloseIconSize         = 11
+	tabInset                 = 4
+	tabGap                   = 2
+	tabFadeWidth             = 24
 	statusHeight             = 24
 	statusItemHeight         = 20
 	textWidth                = 720
@@ -62,7 +72,7 @@ const (
 	iconFolderSize = 15
 	emptyIconSize  = 28
 	spinnerSize    = 10
-	unsavedDotSize = 4
+	unsavedDotSize = 3
 	modeTrackInset = 2
 	modeShadowY    = 1
 	modeShadowBlur = 2
@@ -175,7 +185,7 @@ func appTheme(t ui.Theme, font string) *ui.Theme {
 func sidebarTheme(t ui.Theme) *ui.Theme {
 	t.Background = t.Surface
 	t.Spacing = 4.5
-	t.Accent = selectedFill(&t)
+	t.Accent = fileSelectionFill(&t)
 	t.AccentText = t.Text
 	t.InactiveAccent = t.Accent
 	t.SurfaceHover = rowFill(&t)
@@ -193,6 +203,11 @@ func selectedFill(t *ui.Theme) ui.Color {
 		return t.Text.Alpha(0.10)
 	}
 	return t.Text.Alpha(0.08)
+}
+
+// 文件树和文件标签使用同一个实色，避免在各自底色上叠加后出现色差。
+func fileSelectionFill(t *ui.Theme) ui.Color {
+	return selectedFill(t).Over(t.Surface)
 }
 
 // raisedFill 是分段控件中选中段的底色，比轨道亮一档，深色外观下不能比轨道更暗。

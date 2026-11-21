@@ -5,7 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
 
@@ -37,6 +39,7 @@ func newTestApp(t *testing.T, source string) (*App, *session) {
 		t.Fatal(err)
 	}
 	a := newApp()
+	t.Cleanup(a.cancel)
 	a.vault, a.tree = v, tree
 	a.publishFn = func(func()) {}
 	s := newSession("note.md", src, st)
@@ -50,6 +53,7 @@ func TestFinishSaveKeepsNewerEditDirty(t *testing.T) {
 	snap := s.ed.Buffer.Snapshot()
 	s.saving = true
 	s.ed.Buffer.Set("new")
+	a.showSession(newSession("other.md", "other", s.stat))
 	a.finishSave(s, a.vault, snap, s.stat, "note", nil)
 	if !s.dirty() || s.saving {
 		t.Fatalf("dirty = %v, saving = %v", s.dirty(), s.saving)
@@ -70,17 +74,17 @@ func TestPreviewDropsStaleSnapshots(t *testing.T) {
 	if a.receivePDF(a.lsp, doc, nil, tinymist.ErrCompile) || !s.previewStarting || s.previewErr != "" {
 		t.Fatal("旧版本改动了当前预览状态")
 	}
-	other := newSession("note.typ", "= Title", vault.FileStat{})
-	other.lspPath, other.lspID, other.previewStarting = doc.Path, 2, true
-	a.current = other
-	if a.receivePDF(a.lsp, doc, nil, tinymist.ErrCompile) || !other.previewStarting || other.previewErr != "" {
-		t.Fatal("旧会话改动了重新打开的笔记")
+	doc = s.lspDocument()
+	s.lspID++
+	if a.receivePDF(a.lsp, doc, nil, tinymist.ErrCompile) || !s.previewStarting || s.previewErr != "" {
+		t.Fatal("切回同一个标签后接受了早先激活的预览")
 	}
 }
 
 // 切换笔记时编辑器按笔记 ID 区分，新笔记不能继承旧笔记的内容和撤销历史。
 func TestSwitchingNotesKeepsEditorsApart(t *testing.T) {
 	a, s := newTestApp(t, "same")
+	a.state.DisableAutosave = true
 	tt := ui.NewTester(a.view, 1200, 800)
 	if err := tt.Click("笔记源码"); err != nil {
 		t.Fatal(err)
@@ -93,7 +97,187 @@ func TestSwitchingNotesKeepsEditorsApart(t *testing.T) {
 	a.showSession(other)
 	tt.Frame()
 	if other.dirty() || other.ed.Buffer.String() != "same" || other.ed.Buffer.CanUndo() {
-		t.Fatalf("new session inherited edits: %q", other.ed.Buffer.String())
+		t.Fatalf("另一标签继承了编辑：%q", other.ed.Buffer.String())
+	}
+	want := s.ed.Buffer.String()
+	s.ed.Select(0, len(want))
+	if err := tt.Click("note.md"); err != nil {
+		t.Fatal(err)
+	}
+	if a.current != s || !s.dirty() || s.ed.Buffer.String() != want || !s.ed.Buffer.CanUndo() || len(a.tabs) != 2 {
+		t.Fatal("切回标签未保留编辑会话")
+	}
+	selection := s.ed.Selection()
+	if selection.Start() != 0 || selection.End() != len(want) {
+		t.Fatal("切回标签未保留选区")
+	}
+	tt.Key(ui.Ctrl, ui.KeyTab)
+	if a.current != other {
+		t.Fatal("快捷键没有切到右侧标签")
+	}
+	if err := tt.Click("关闭 other.md"); err != nil {
+		t.Fatal(err)
+	}
+	if a.current != s || len(a.tabs) != 1 {
+		t.Fatal("关闭标签后未激活邻居")
+	}
+}
+
+func publishedResult(t *testing.T, results <-chan func()) {
+	t.Helper()
+	select {
+	case apply := <-results:
+		apply()
+	case <-time.After(5 * time.Second):
+		t.Fatal("后台任务未返回")
+	}
+}
+
+func TestBackgroundTabAutosaves(t *testing.T) {
+	a, s := newTestApp(t, "old")
+	results := make(chan func(), 4)
+	a.publishFn = func(fn func()) { results <- fn }
+	tt := ui.NewTester(a.view, 1200, 800)
+	s.ed.Buffer.Set("edited")
+	tt.Frame()
+	other := newSession("other.md", "old", s.stat)
+	a.showSession(other)
+	tt.Frame()
+	tt.Advance(autosaveDelay)
+	publishedResult(t, results)
+	got, _, err := a.vault.Read(s.id)
+	if err != nil || got != "edited" || s.dirty() || s.saving || a.current != other {
+		t.Fatalf("后台保存状态异常：内容 %q，错误 %v，未保存 %v", got, err, s.dirty())
+	}
+}
+
+func TestBackgroundConflictDoesNotBlockTabs(t *testing.T) {
+	a, s := newTestApp(t, "old")
+	a.state.DisableAutosave = true
+	results := make(chan func(), 4)
+	a.publishFn = func(fn func()) { results <- fn }
+	s.ed.Buffer.Set("mine")
+	other := newSession("other.md", "old", s.stat)
+	a.showSession(other)
+	if _, err := a.vault.Write(s.id, s.stat, strings.NewReader("external")); err != nil {
+		t.Fatal(err)
+	}
+	a.filesChanged(a.vault, []mygo.FileEvent{{Path: s.id, Op: mygo.FileWrite}})
+	for range 2 {
+		publishedResult(t, results)
+	}
+	if !s.conflict || !s.dirty() || s.text() != "mine" || a.current != other {
+		t.Fatal("后台文件冲突状态或编辑内容丢失")
+	}
+	a.openNote(s.id)
+	a.openNote(other.id)
+	if a.current != other || a.busy {
+		t.Fatal("后台冲突阻止了标签切换")
+	}
+	called := false
+	a.afterSaving(a.sessionsUnder(""), false, func() { called = true })
+	if called || a.busy || !s.dirty() {
+		t.Fatal("保存冲突时执行了会释放会话的操作")
+	}
+}
+
+func TestCloseTabMenuSavesOnlyClosingTabs(t *testing.T) {
+	a, first := newTestApp(t, "old")
+	a.state.DisableAutosave = true
+	results := make(chan func(), 1)
+	a.publishFn = func(fn func()) { results <- fn }
+	_, st, err := a.vault.Read("other.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.showSession(newSession("dir/other.md", "old", st))
+	a.openNote(first.id)
+	tt := ui.NewTester(a.view, 1200, 800)
+	if err := tt.RightClick("dir/other.md"); err != nil {
+		t.Fatal(err)
+	}
+	if a.current != first {
+		t.Fatalf("打开后台标签的菜单时激活了 %s", a.openID())
+	}
+	if err := tt.ChooseMenuItem("关闭"); err != nil {
+		t.Fatal(err)
+	}
+	if len(a.tabs) != 1 || a.current != first {
+		t.Fatal("关闭单个后台标签影响了当前文件")
+	}
+	other := newSession("other.md", "old", st)
+	a.showSession(other)
+	a.openNote(first.id)
+	first.ed.Buffer.Set("save first")
+	other.ed.Buffer.Set("keep editing")
+	tt.Frame()
+	rightClick := func() {
+		close, ok := tt.Find("关闭 " + other.id)
+		if !ok {
+			t.Fatal("找不到标签的关闭按钮")
+		}
+		tt.RightClickAt(close.X+close.W/2, close.Y+close.H/2)
+	}
+	rightClick()
+	if a.current != first {
+		t.Fatal("打开后台标签的菜单时切换了文件")
+	}
+	if err := tt.ChooseMenuItem("关闭其他标签页"); err != nil {
+		t.Fatal(err)
+	}
+	publishedResult(t, results)
+	tt.Frame()
+	if len(a.tabs) != 1 || a.current != other || first.dirty() || !other.dirty() {
+		t.Fatal("关闭其他标签页未能保存目标文件并保留右键标签的编辑")
+	}
+	a.showSession(first)
+	first.ed.Buffer.Set("save again")
+	tt.Frame()
+	rightClick()
+	if err := tt.ChooseMenuItem("关闭全部标签页"); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		publishedResult(t, results)
+	}
+	tt.Frame()
+	if len(a.tabs) != 0 || a.current != nil || first.dirty() || other.dirty() {
+		t.Fatal("关闭全部标签页未能保存两个文件并清空标签栏")
+	}
+}
+
+func TestWorkspaceRestoresTabsAndExplicitEmpty(t *testing.T) {
+	a, s := newTestApp(t, "old")
+	a.showSession(newSession("other.md", "old", s.stat))
+	root := a.vault.Root()
+	name := filepath.Join(t.TempDir(), "state.json")
+	if err := vault.SaveState(name, a.state.Clone()); err != nil {
+		t.Fatal(err)
+	}
+	state, err := vault.LoadState(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := newApp()
+	t.Cleanup(b.cancel)
+	b.vault, b.tree = a.vault, a.tree
+	results := make(chan func(), 1)
+	b.publishFn = func(fn func()) { results <- fn }
+	b.restoreTabs(state.Workspaces[root])
+	publishedResult(t, results)
+	if len(b.tabs) != 2 || b.tabs[0].id != "note.md" || b.tabs[0].session != nil || b.openID() != "other.md" {
+		t.Fatal("未按顺序恢复标签，或提前加载了后台文件")
+	}
+	a.removeTabs(func(*fileTab) bool { return true })
+	if err := vault.SaveState(name, a.state.Clone()); err != nil {
+		t.Fatal(err)
+	}
+	state, err = vault.LoadState(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := state.Workspaces[root]; w.Tabs == nil || len(w.Tabs) != 0 || w.Selected != "" {
+		t.Fatalf("空标签列表未保留：%+v", w)
 	}
 }
 

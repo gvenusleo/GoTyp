@@ -18,11 +18,7 @@ type renameState struct {
 
 // newNote 在当前笔记所在目录新建笔记，供快捷键和菜单栏使用。
 func (a *App) newNote(kind vault.Kind) {
-	dir := ""
-	if a.current != nil {
-		dir = parentDir(a.current.id)
-	}
-	a.createNoteIn(dir, kind)
+	a.createNoteIn(parentDir(a.openID()), kind)
 }
 
 // createNoteIn 直接创建「未命名」笔记并打开，不经过保存对话框。
@@ -31,27 +27,27 @@ func (a *App) createNoteIn(dir string, kind vault.Kind) {
 		return
 	}
 	v := a.vault
-	a.switchAfterSave(func() {
-		a.generation++
-		generation := a.generation
-		a.busy = true
-		go func() {
-			id, st, err := v.CreateUntitled(dir, kind)
-			a.publish(func() {
-				if a.vault != v || a.generation != generation {
-					return
-				}
-				a.busy = false
-				if err != nil {
-					a.notify("新建失败：" + err.Error())
-					return
-				}
-				a.addToTree(id, false)
-				a.showSession(newSession(id, "", st))
-				a.rescan()
-			})
-		}()
-	})
+	reserved := make([]string, 0, len(a.tabs))
+	for _, tab := range a.tabs {
+		reserved = append(reserved, tab.id)
+	}
+	a.busy = true
+	go func() {
+		id, st, err := v.CreateUntitled(dir, kind, reserved...)
+		a.publish(func() {
+			if a.vault != v {
+				return
+			}
+			a.busy = false
+			if err != nil {
+				a.notify("新建失败：" + err.Error())
+				return
+			}
+			a.addToTree(id, false)
+			a.showSession(newSession(id, "", st))
+			a.rescan()
+		})
+	}()
 }
 
 func (a *App) createFolder(dir string) {
@@ -105,19 +101,26 @@ func (a *App) startRename(id string) {
 	a.rename = renameState{open: true, id: id, name: path.Base(id)}
 }
 
-// commitRename 先保存受影响的当前笔记，再改名并让会话跟随新路径。
+// commitRename 先保存受影响的笔记，再让标签跟随新路径。
 func (a *App) commitRename() {
 	r := a.rename
 	a.rename.open = false
 	name := strings.TrimSpace(r.name)
-	if a.vault == nil || name == "" || name == path.Base(r.id) {
+	if a.vault == nil || a.busy || name == "" || name == path.Base(r.id) {
 		return
 	}
 	if ext := path.Ext(r.id); a.tree != nil && !a.tree.Dirs[r.id] && path.Ext(name) == "" {
 		name += ext
 	}
+	target := path.Join(parentDir(r.id), name)
+	for _, tab := range a.tabs {
+		if !affects(r.id, tab.id) && affects(target, tab.id) {
+			a.notify("重命名失败：目标路径已有打开的标签")
+			return
+		}
+	}
 	v := a.vault
-	a.switchAfterSave(func() {
+	a.afterSaving(a.sessionsUnder(r.id), false, func() {
 		a.busy = true
 		go func() {
 			id, err := v.Rename(r.id, name)
@@ -137,43 +140,44 @@ func (a *App) commitRename() {
 	})
 }
 
-// renamed 让当前会话和侧栏展开状态跟随改名。改名不改变文件身份，已记录的文件状态仍然有效。
+// renamed 保留标签顺序，并按新的扩展名选择打开方式。
 func (a *App) renamed(from, to string) {
 	if a.outline.Open.Has(from) {
 		a.outline.Open.Remove(from)
 		a.outline.Open.Add(to)
 	}
-	// 查看器没有要保留的状态，改名后按新路径重新打开；新扩展名可能换一种打开方式。
-	if vw := a.viewing; vw != nil && affects(from, vw.id) {
-		a.loadSession(to + strings.TrimPrefix(vw.id, from))
-		return
+	for _, tab := range a.tabs {
+		if !affects(from, tab.id) {
+			continue
+		}
+		tab.id = to + strings.TrimPrefix(tab.id, from)
+		// 改名期间的监听结果仍指向旧路径，保留刷新请求直到用新路径核对。
+		tab.changed, tab.checking = tab.loaded(), false
+		if tab == a.activeTab {
+			a.stopPreview(a.current)
+			a.detachLSP(a.current)
+		}
+		if s := tab.session; s != nil && !isImage(tab.id) {
+			s.id = tab.id
+			s.updateLanguage()
+			if s.kind == vault.KindMarkdown {
+				a.configurePreview(s)
+			}
+			s.resetPreview()
+		} else {
+			tab.session, tab.viewer = nil, nil
+		}
+		if tab == a.activeTab {
+			a.activateTab(tab)
+			if tab.session == nil {
+				a.loadSession(tab.id)
+			}
+		}
 	}
-	s := a.current
-	if s == nil || !affects(from, s.id) {
-		return
-	}
-	if next := to + strings.TrimPrefix(s.id, from); isImage(next) {
-		// 改成了图片扩展名：内容已在改名前保存，直接按图片重新打开。
-		a.loadSession(next)
-		return
-	}
-	a.stopPreview(s)
-	a.detachLSP(s)
-	s.id = to + strings.TrimPrefix(s.id, from)
-	s.updateLanguage()
-	s.resetPreview()
-	a.attachLSP(s)
-	a.configurePreview(s)
-	a.previewChanged(s)
-	a.chosen.Clear()
-	a.chosen.Add(s.id)
-	a.revealInOutline(s.id)
-	a.syncWindow()
 	a.persistWorkspace()
-	a.refreshMenu()
 }
 
-// trashItem 把条目移到系统废纸篓。涉及当前笔记时先保存，让废纸篓里是最新内容。
+// trashItem 把条目移到系统废纸篓前，保存所有受影响的编辑会话。
 func (a *App) trashItem(id string) {
 	if a.vault == nil || a.busy {
 		return
@@ -184,7 +188,7 @@ func (a *App) trashItem(id string) {
 		a.notify("无法解析路径：" + err.Error())
 		return
 	}
-	run := func() {
+	a.afterSaving(a.sessionsUnder(id), false, func() {
 		a.busy = true
 		go func() {
 			err := mygo.Shell.TrashItem(name)
@@ -197,16 +201,9 @@ func (a *App) trashItem(id string) {
 					a.notify("移到废纸篓失败：" + err.Error())
 					return
 				}
-				if open := a.openID(); open != "" && affects(id, open) {
-					a.closeSession()
-				}
+				a.removeTabs(func(tab *fileTab) bool { return affects(id, tab.id) })
 				a.rescan()
 			})
 		}()
-	}
-	if a.current != nil && affects(id, a.current.id) {
-		a.switchAfterSave(run)
-		return
-	}
-	run()
+	})
 }

@@ -3,8 +3,8 @@ package gui
 import (
 	"context"
 	"errors"
-	"path"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -29,9 +29,12 @@ type session struct {
 	ed   *editor.State
 	stat vault.FileStat
 
+	// 保存期间继续编辑时，MyGo 只能标记当前文本，已写入的内容由会话暂存。
+	savedContent    *string
+	comparedVersion uint64
+
 	saving    bool
 	saveAgain bool
-	afterSave func()
 	conflict  bool
 	deleted   bool // 冲突的原因是文件被删除
 	err       string
@@ -46,6 +49,7 @@ type session struct {
 	source        string
 	sourceVersion uint64
 	md            markdown.Options
+	mdScroll      ui.ScrollState
 
 	// Typst 预览快照的状态，见 typstpreview.go。
 	syncedVersion   uint64
@@ -54,6 +58,7 @@ type session struct {
 	previewReady    bool
 	previewStarting bool
 	previewCancel   context.CancelFunc
+	previewVersion  uint64
 	previewErr      string
 	previewMissing  bool
 	previewErrOpen  bool
@@ -105,7 +110,32 @@ func (s *session) text() string {
 }
 
 func (s *session) dirty() bool {
-	return s != nil && s.ed.Buffer.Modified()
+	if s == nil {
+		return false
+	}
+	buf := s.ed.Buffer
+	if s.savedContent == nil {
+		return buf.Modified()
+	}
+	version := buf.Version()
+	if s.comparedVersion == version {
+		return true
+	}
+	s.comparedVersion = version
+	if snapshotContent(buf.Snapshot()) != *s.savedContent {
+		return true
+	}
+	buf.MarkSaved()
+	s.savedContent = nil
+	return false
+}
+
+// 比较写入磁盘的字节，保留混合换行符的差异。
+func snapshotContent(snap editor.Snapshot) string {
+	var text strings.Builder
+	text.Grow(snap.Len())
+	snap.WriteTo(&text)
+	return text.String()
 }
 
 // applyEditorPrefs 应用与单篇笔记无关的编辑器偏好。
@@ -133,7 +163,9 @@ func (a *App) observe(c *ui.Context, s *session) {
 		a.previewChanged(s)
 		a.syncWindow()
 	}
-	a.schedulePreview(s)
+	if a.current == s {
+		a.schedulePreview(s)
+	}
 	if a.state.DisableAutosave || !s.dirty() || s.saving || s.conflict || a.busy {
 		return
 	}
@@ -157,28 +189,21 @@ func (a *App) observe(c *ui.Context, s *session) {
 }
 
 func (a *App) saveCurrent() {
-	if a.current != nil {
-		a.saveSession(a.current)
+	if s := a.current; s != nil && !a.busy {
+		if s.conflict {
+			a.notify("文件存在外部修改，请先在提示行中处理")
+			return
+		}
+		a.saveSession(s)
 	}
 }
 
 func (a *App) saveSession(s *session) {
-	if s.conflict {
-		a.notify("文件存在外部修改，请先在提示行中处理")
-		a.transitionFailed(s)
-		return
-	}
 	if s.saving {
 		s.saveAgain = true
 		return
 	}
-	if !s.dirty() {
-		action := s.afterSave
-		s.afterSave = nil
-		a.busy = false
-		if action != nil {
-			action()
-		}
+	if !s.dirty() || s.conflict {
 		return
 	}
 	v := a.vault
@@ -199,20 +224,24 @@ func (a *App) saveSession(s *session) {
 }
 
 func (a *App) finishSave(s *session, v *vault.Vault, snap editor.Snapshot, st vault.FileStat, title string, err error) {
-	if a.current != s || a.vault != v {
+	tab := a.findTab(s.id)
+	if tab == nil || tab.session != s || a.vault != v {
 		return
 	}
 	s.saving = false
-	if a.tree != nil {
+	if err == nil && a.tree != nil {
 		if _, ok := a.tree.Titles[s.id]; ok {
 			a.tree.Titles[s.id] = title
 		}
 	}
 	switch {
-	case errors.Is(err, vault.ErrConflict):
+	case errors.Is(err, vault.ErrConflict) || fileDeleted(err):
 		s.conflict = true
-		s.deleted = errors.Is(err, vault.ErrDeleted)
+		s.deleted = fileDeleted(err)
 		s.err = err.Error()
+		if s.deleted {
+			s.err = vault.ErrDeleted.Error()
+		}
 	case err != nil:
 		s.err = "保存失败：" + err.Error()
 		s.retryPending = true
@@ -223,82 +252,21 @@ func (a *App) finishSave(s *session, v *vault.Vault, snap editor.Snapshot, st va
 		s.retryAt = time.Time{}
 		if s.ed.Buffer.Version() == snap.Version() {
 			s.ed.Buffer.MarkSaved()
+			s.savedContent = nil
+		} else {
+			s.savedContent = new(snapshotContent(snap))
+			s.comparedVersion = snap.Version()
 		}
 	}
 	if !s.dirty() {
 		s.firstEdit, s.lastEdit = time.Time{}, time.Time{}
 	}
 	a.syncWindow()
-	if err == nil && (s.saveAgain || (s.afterSave != nil && s.dirty())) {
+	if a.transition != nil && a.transition.sessions[0] == s {
+		a.continueSaving(err)
+	} else if err == nil && s.saveAgain && s.dirty() {
 		a.saveSession(s)
-		return
 	}
-	action := s.afterSave
-	s.afterSave = nil
-	if err != nil {
-		if action != nil {
-			a.transitionFailed(s)
-		}
-		return
-	}
-	a.busy = false
-	if action != nil {
-		action()
-	}
-}
-
-// switchAfterSave 在切换、关闭或退出前保存最新版本，失败时取消整个动作。
-func (a *App) switchAfterSave(action func()) {
-	a.busy = true
-	if a.current == nil {
-		a.busy = false
-		action()
-		return
-	}
-	a.current.afterSave = action
-	a.saveSession(a.current)
-}
-
-// transitionFailed 在切换、关闭或退出前的保存失败时取消动作。关闭和退出时询问是否放弃未保存的修改，
-// 否则冲突或持续的写入失败会让用户只能强制退出。
-func (a *App) transitionFailed(s *session) {
-	closing, quitting := a.closing, a.quitting
-	a.cancelTransition()
-	if (closing || quitting) && a.win != nil {
-		// 推迟到当前事件处理结束后再弹出模态对话框，退出事件的回调中不阻塞。
-		a.publish(func() { a.confirmDiscard(s, quitting) })
-	}
-}
-
-func (a *App) confirmDiscard(s *session, quit bool) {
-	if a.current != s {
-		return
-	}
-	res, err := mygo.Dialog.Message(mygo.MessageOptions{
-		Parent: a.win, Type: mygo.MessageWarning,
-		Message: "「" + path.Base(s.id) + "」的修改无法保存", Detail: s.err,
-		Buttons: []string{"取消", "放弃修改"}, DefaultButton: 0, CancelButton: 0, DestructiveButtons: []int{1},
-	})
-	if err != nil || res.Button != 1 {
-		return
-	}
-	a.discarding = true
-	if quit {
-		mygo.App.Quit()
-	} else {
-		a.win.Close()
-	}
-}
-
-func (a *App) cancelTransition() {
-	a.pendingJump = nil
-	a.busy = false
-	a.closing = false
-	a.quitting = false
-	if a.current != nil {
-		a.current.afterSave = nil
-	}
-	a.syncSelection()
 }
 
 func (a *App) reloadCurrent() {
@@ -308,10 +276,10 @@ func (a *App) reloadCurrent() {
 	}
 	a.generation++
 	generation := a.generation
-	v := a.vault
+	v, id := a.vault, s.id
 	a.busy = true
 	go func() {
-		source, st, err := v.Read(s.id)
+		source, st, err := v.Read(id)
 		a.publish(func() {
 			if a.current != s || a.vault != v || a.generation != generation {
 				return
@@ -321,17 +289,23 @@ func (a *App) reloadCurrent() {
 				s.err = "重新加载失败：" + err.Error()
 				return
 			}
-			s.ed.Buffer.Reset(source)
-			s.stat = st
-			s.conflict, s.deleted = false, false
-			s.err = ""
-			s.observed = s.ed.Buffer.Version()
-			s.source, s.sourceVersion = source, s.observed
-			s.firstEdit, s.lastEdit = time.Time{}, time.Time{}
-			a.previewChanged(s)
-			a.syncWindow()
+			a.replaceSource(s, source, st)
 		})
 	}()
+}
+
+func (a *App) replaceSource(s *session, source string, stat vault.FileStat) {
+	s.ed.Buffer.Reset(source)
+	s.stat = stat
+	s.savedContent = nil
+	s.conflict, s.deleted = false, false
+	s.err = ""
+	s.retryPending, s.retryAt = false, time.Time{}
+	s.observed = s.ed.Buffer.Version()
+	s.source, s.sourceVersion = source, s.observed
+	s.firstEdit, s.lastEdit = time.Time{}, time.Time{}
+	a.previewChanged(s)
+	a.syncWindow()
 }
 
 // overwriteCurrent 在用户明确选择后，用当前编辑覆盖外部版本或重新创建已删除的文件。
@@ -402,7 +376,7 @@ func (a *App) syncWindow() {
 		a.win.SetRepresentedFile("")
 		return
 	}
-	a.win.SetTitle(path.Base(id))
+	a.win.SetTitle(filepath.Base(id))
 	a.win.SetDocumentEdited(a.current.dirty())
 	if a.vault != nil {
 		// 仓库根路径和文件 ID 已在读写时校验，窗口元数据无需再次访问文件系统。
