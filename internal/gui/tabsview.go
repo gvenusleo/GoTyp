@@ -2,22 +2,51 @@ package gui
 
 import (
 	"path"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 )
 
 func (a *App) tabsView(c *ui.Context, narrowing bool) {
-	directories := make(map[string][]string, len(a.tabs))
-	for _, tab := range a.tabs {
-		name := path.Base(tab.id)
-		directories[name] = append(directories[name], path.Dir(tab.id))
-	}
 	strip := ui.ScrollHorizontal(c.Key("file-tabs-scroll")).Height(tabHeight).Grow(1).MinWidth(0).
 		TrackScroll(&a.tabScroll).Scrollbars(false).Label("打开的文件").HandleInput(a.scrollTabs)
 	if fade, ok := tabFadeMask(c, &a.tabScroll); ok {
 		strip.MaskLinearGradient(fade)
 	}
+	direction := float32(1)
+	if c.Direction() == ui.RightToLeft {
+		direction = -1
+	}
+	scrollX := a.tabScroll.X
+	dragged, x, dropped := a.tabDrag(c, strip)
+	rows, closeTabs := a.tabRows(c, strip, narrowing, dragged != nil)
+	if from := slices.Index(a.tabs, dragged); from >= 0 {
+		bounds := make([]ui.Rect, len(rows))
+		for i, row := range rows {
+			bounds[i] = row.LayoutBounds()
+		}
+		x += direction * (a.tabScroll.X - scrollX)
+		gap := tabInsertionGap(bounds, x, direction)
+		if dropped {
+			a.moveTab(dragged, gap)
+		} else {
+			shiftTabRows(rows, bounds, from, gap, direction)
+		}
+	}
+	if closeTabs != nil {
+		closeTabs()
+	}
+}
+
+func (a *App) tabRows(c *ui.Context, strip ui.Element, narrowing, collectRows bool) ([]ui.Element, func()) {
+	directories := make(map[string][]string, len(a.tabs))
+	for _, tab := range a.tabs {
+		name := path.Base(tab.id)
+		directories[name] = append(directories[name], path.Dir(tab.id))
+	}
+	var rows []ui.Element
 	var closeTabs func()
 	strip.Children(func() {
 		tabs := ui.TabsBase(c, &a.tabIndex, len(a.tabs))
@@ -30,6 +59,9 @@ func (a *App) tabsView(c *ui.Context, narrowing bool) {
 				name := path.Base(tab.id)
 				dir := tabDirectory(path.Dir(tab.id), directories[name])
 				row := a.tabView(c, tabs, i, tab, name, dir)
+				if collectRows {
+					rows = append(rows, row)
+				}
 				if tab == a.activeTab && a.revealTab {
 					if narrowing || !a.tabInClearArea(c, row.Bounds()) {
 						row.ScrollIntoView(ui.ScrollIntoViewOptions{Inline: ui.ScrollCenter})
@@ -42,9 +74,7 @@ func (a *App) tabsView(c *ui.Context, narrowing bool) {
 			}
 		})
 	})
-	if closeTabs != nil {
-		closeTabs()
-	}
+	return rows, closeTabs
 }
 
 func (a *App) tabView(c *ui.Context, tabs ui.TabsParts, i int, tab *fileTab, name, dir string) ui.Element {
@@ -52,12 +82,21 @@ func (a *App) tabView(c *ui.Context, tabs ui.TabsParts, i int, tab *fileTab, nam
 	active := tab == a.activeTab
 	row := ui.Row(c.Key(tab.id)).Height(tabHeight).AlignItems(ui.Center).Shrink(0).Radius(t.Radius)
 	hovered := row.Hovered()
-	if active && len(a.tabs) > 1 {
-		row.Background(fileSelectionFill(t))
-	}
 	return row.Children(func() {
-		part := tabs.Tab(i).Height(tabHeight).Gap(t.Space(1)).Padding(0, tabGap, 0, tabLabelInset).
-			AlignItems(ui.Center).Disabled(a.busy).Label(tab.id).Tooltip(tab.id)
+		part := tabs.Tab(i).Height(tabHeight).AlignItems(ui.Center).Radius(t.Radius).
+			Disabled(a.busy).Label(tab.id).Tooltip(tab.id)
+		if !a.busy && len(a.tabs) > 1 {
+			part.Drag(tab)
+		}
+		dragging := part.Dragging()
+		switch {
+		case dragging:
+			// MyGo 在指针下画出完整副本，原位只留下占位。
+			part.Background(t.SurfacePressed).Opacity(0)
+			row.Background(rowFill(t))
+		case active && len(a.tabs) > 1:
+			part.Background(fileSelectionFill(t))
+		}
 		status, glyph, statusColor := tabStatus(t, tab.session)
 		if status != "" {
 			part.Description(status)
@@ -66,12 +105,48 @@ func (a *App) tabView(c *ui.Context, tabs ui.TabsParts, i int, tab *fileTab, nam
 			part.OnClick(func() { a.openNote(tab.id) })
 		}
 		color := t.TextMuted
-		if active || hovered {
+		if active || hovered || dragging {
 			color = t.Text
 		}
-		part.Children(func() { tabTitle(c, name, dir, color) })
-		a.tabCloseButton(c, tab, glyph, statusColor, status != "" && !hovered, active || hovered || row.FocusWithin())
+		part.Children(func() {
+			tabTitle(c, name, dir, color)
+			tabActionSlot(ui.Box(c)).MarginEnd(tabInset).Children(func() {
+				if dragging && status != "" {
+					tabStatusIcon(c, glyph, statusColor)
+				}
+			})
+		})
+		button := a.tabCloseButton(c, tab, glyph, statusColor, status != "" && !hovered, active || hovered || row.FocusWithin())
+		if dragging {
+			button.Opacity(0)
+		}
 	})
+}
+
+func shiftTabRows(rows []ui.Element, bounds []ui.Rect, from, gap int, direction float32) {
+	source := bounds[from]
+	shift := direction * (source.W + tabGap)
+	switch {
+	case gap < from:
+		target := bounds[gap]
+		for _, row := range rows[gap:from] {
+			row.Translate(shift, 0)
+		}
+		rows[from].Translate(tabLeadingEdge(target, direction)-tabLeadingEdge(source, direction), 0)
+	case gap > from+1:
+		target := bounds[gap-1]
+		for _, row := range rows[from+1 : gap] {
+			row.Translate(-shift, 0)
+		}
+		rows[from].Translate(tabLeadingEdge(target, -direction)-tabLeadingEdge(source, -direction), 0)
+	}
+}
+
+func tabLeadingEdge(bounds ui.Rect, direction float32) float32 {
+	if direction < 0 {
+		return bounds.X + bounds.W
+	}
+	return bounds.X
 }
 
 func (a *App) tabMenu(m *ui.Menu, tab *fileTab) func() {
@@ -112,15 +187,70 @@ func tabDirectory(dir string, directories []string) string {
 }
 
 func tabTitle(c *ui.Context, name, dir string, color ui.Color) {
-	width := float32(tabTextWidth)
-	if dir != "" {
-		width -= tabDirectoryWidth
+	ui.Row(c).Height(tabHeight).Padding(0, tabGap, 0, tabLabelInset).
+		Gap(c.Theme().Space(1)).AlignItems(ui.Center).Children(func() {
+		width := float32(tabTextWidth)
+		if dir != "" {
+			width -= tabDirectoryWidth
+		}
+		ui.Text(c, name).TextColor(color).SingleLine().Ellipsis("…").MaxWidth(width)
+		if dir != "" {
+			ui.Text(c, dir).TextColor(c.Theme().TextMuted).FontSize(detailFontSize).
+				SingleLine().Ellipsis("…").MaxWidth(tabDirectoryWidth)
+		}
+	})
+}
+
+func (a *App) tabDrag(c *ui.Context, strip ui.Element) (*fileTab, float32, bool) {
+	if a.busy || len(a.tabs) < 2 {
+		return nil, 0, false
 	}
-	ui.Text(c, name).TextColor(color).SingleLine().Ellipsis("…").MaxWidth(width)
-	if dir != "" {
-		ui.Text(c, dir).TextColor(c.Theme().TextMuted).FontSize(detailFontSize).
-			SingleLine().Ellipsis("…").MaxWidth(tabDirectoryWidth)
+	// 保存松手坐标，以免下一帧构建前的指针移动改变落点。
+	releaseX := ui.Local(strip, "tab-release-x", func() float32 { return 0 })
+	strip.ObserveInput(func(ev ui.InputEvent) {
+		if ev.Kind == ui.InputPointerUp && ev.Button == 0 && !ev.Canceled {
+			*releaseX = ev.X
+		}
+	})
+	area := strip.Bounds()
+	nextScroll := ui.Local(strip, "tab-drag-scroll", func() time.Time { return time.Time{} })
+	if tab, ok := ui.Drop[*fileTab](strip); ok {
+		*nextScroll = time.Time{}
+		return tab, area.X + *releaseX, true
 	}
+	if tab, over := ui.DragOver[*fileTab](strip); over && slices.Contains(a.tabs, tab) {
+		x, _, inside := strip.PointerPosition()
+		if inside {
+			distance := x
+			if c.Direction() == ui.RightToLeft {
+				distance = area.W - x
+			}
+			a.scrollTabsOnDrag(c, distance, area.W, nextScroll)
+			return tab, area.X + x, false
+		}
+	}
+	*nextScroll = time.Time{}
+	return nil, 0, false
+}
+
+func (a *App) scrollTabsOnDrag(c *ui.Context, x, width float32, next *time.Time) {
+	edge := min(float32(tabFadeWidth), width/2)
+	if edge <= 0 {
+		return
+	}
+	s := &a.tabScroll
+	innerX := min(max(x, edge), width-edge)
+	offset := min(max(s.X+(x-innerX)*tabDragStep/edge, 0), s.MaxX)
+	if offset == s.X {
+		*next = time.Time{}
+		return
+	}
+	now := c.Now()
+	if !now.Before(*next) {
+		s.X = offset
+		*next = now.Add(time.Second / 60)
+	}
+	c.After(next.Sub(now))
 }
 
 // 隐藏滚动条后，只有纵向滚轮的鼠标也能浏览标签。
@@ -163,12 +293,11 @@ func tabFadeMask(c *ui.Context, s *ui.ScrollState) (ui.LinearGradient, bool) {
 	}}, true
 }
 
-func (a *App) tabCloseButton(c *ui.Context, tab *fileTab, glyph *ui.SVG, statusColor ui.Color, showStatus, showClose bool) {
+func (a *App) tabCloseButton(c *ui.Context, tab *fileTab, glyph *ui.SVG, statusColor ui.Color, showStatus, showClose bool) ui.Element {
 	t := c.Theme()
 	label := "关闭 " + tab.id
-	button := ui.ButtonBase(c.Key("close")).Label(label).Tooltip(label).
-		Size(tabCloseSize, tabCloseSize).Margin(0, tabInset, 0, 0).Shrink(0).Radius(t.Radius).
-		Justify(ui.Center).AlignItems(ui.Center).Disabled(a.busy).OnClick(func() { a.closeTab(tab) })
+	button := tabActionSlot(ui.ButtonBase(c.Key("close"))).Absolute().End(tabInset).Top((tabHeight - tabCloseSize) / 2).
+		Label(label).Tooltip(label).Radius(t.Radius).Disabled(a.busy).OnClick(func() { a.closeTab(tab) })
 	color := t.TextMuted
 	switch {
 	case button.Pressed():
@@ -178,18 +307,26 @@ func (a *App) tabCloseButton(c *ui.Context, tab *fileTab, glyph *ui.SVG, statusC
 		button.Background(buttonFill(t))
 		color = t.Text
 	}
-	button.Children(func() {
+	return button.Children(func() {
 		focused := button.Focused()
 		if showStatus && !focused {
-			if glyph != nil {
-				ui.Icon(c, glyph).FontSize(tabCloseIconSize).TextColor(statusColor)
-			} else {
-				ui.Box(c).Size(unsavedDotSize, unsavedDotSize).Radius(unsavedDotSize / 2.0).Background(statusColor)
-			}
+			tabStatusIcon(c, glyph, statusColor)
 		} else if showClose || focused {
 			ui.Icon(c, iconClose).FontSize(tabCloseIconSize).TextColor(color)
 		}
 	})
+}
+
+func tabActionSlot(e ui.Element) ui.Element {
+	return e.Size(tabCloseSize, tabCloseSize).Shrink(0).Justify(ui.Center).AlignItems(ui.Center)
+}
+
+func tabStatusIcon(c *ui.Context, glyph *ui.SVG, color ui.Color) {
+	if glyph != nil {
+		ui.Icon(c, glyph).FontSize(tabCloseIconSize).TextColor(color)
+	} else {
+		ui.Box(c).Size(unsavedDotSize, unsavedDotSize).Radius(unsavedDotSize / 2.0).Background(color)
+	}
 }
 
 func tabStatus(t *ui.Theme, s *session) (string, *ui.SVG, ui.Color) {
