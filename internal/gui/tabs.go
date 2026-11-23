@@ -3,6 +3,8 @@ package gui
 import (
 	"slices"
 
+	"github.com/egoist/mygo/ui"
+
 	"gotyp/internal/vault"
 )
 
@@ -141,6 +143,34 @@ func (a *App) activateTab(tab *fileTab) {
 		a.checkTabs()
 	}
 	a.refreshMenu()
+}
+
+// tabInsertionGap 按标签未让位时的布局中点确定插入位置，避免下一帧反向让位。
+func tabInsertionGap(bounds []ui.Rect, x, direction float32) int {
+	for i, rect := range bounds {
+		if rect.W > 0 && direction*(x-rect.X-rect.W/2) < 0 {
+			return i
+		}
+	}
+	return len(bounds)
+}
+
+// moveTab 将标签移到原顺序的插入位置，保留原有编辑会话。
+func (a *App) moveTab(tab *fileTab, gap int) {
+	if a.busy || gap < 0 || gap > len(a.tabs) {
+		return
+	}
+	from := slices.Index(a.tabs, tab)
+	if from < 0 || gap == from || gap == from+1 {
+		return
+	}
+	if gap > from {
+		gap--
+	}
+	a.tabs = slices.Delete(a.tabs, from, from+1)
+	a.tabs = slices.Insert(a.tabs, gap, tab)
+	a.tabIndex = max(0, slices.Index(a.tabs, a.activeTab))
+	a.persistWorkspace()
 }
 
 func (a *App) stepTab(delta int) {
