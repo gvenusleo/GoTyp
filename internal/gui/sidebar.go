@@ -1,5 +1,21 @@
 package gui
 
+import "gotyp/internal/vault"
+
+// treeDrag 只在发起拖动的仓库内有效。
+type treeDrag struct {
+	vault *vault.Vault
+	id    string
+}
+
+// dragTreeRow 让 Outline 继续负责点选和展开，拖动时只携带一个条目。
+func (a *App) dragTreeRow(rows []int) any {
+	if a.busy || len(rows) != 1 || rows[0] >= a.outline.Rows() {
+		return nil
+	}
+	return treeDrag{vault: a.vault, id: a.outline.Item(rows[0])}
+}
+
 // revealInOutline 展开 id 的各级上级目录，让它在文件树中可见。
 func (a *App) revealInOutline(id string) {
 	for dir := parentDir(id); dir != ""; dir = parentDir(dir) {

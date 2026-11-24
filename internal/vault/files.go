@@ -98,6 +98,35 @@ func (v *Vault) Rename(id, name string) (string, error) {
 	return filepath.ToSlash(target), nil
 }
 
+// Move 把条目移入 dir。空目录 ID 表示仓库根目录。
+func (v *Vault) Move(id, dir string) (string, error) {
+	from, err := v.entryPath(id)
+	if err != nil {
+		return "", err
+	}
+	if dir == id || strings.HasPrefix(dir, id+"/") {
+		return "", errors.New("不能将文件夹移入自身或其子目录")
+	}
+	if dir != "" && !validID(dir) {
+		return "", ErrOutside
+	}
+	target := path.Join(dir, path.Base(id))
+	if target == id {
+		return id, nil
+	}
+	to, err := v.entryPath(target)
+	if err != nil {
+		return "", err
+	}
+	if err := moveEntry(from, to); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return "", ErrExists
+		}
+		return "", err
+	}
+	return target, nil
+}
+
 // entryPath 返回条目本身的路径：只解析父目录，不跟随条目自身的符号链接，
 // 这样改名修改的是链接而不是它指向的文件。
 func (v *Vault) entryPath(id string) (string, error) {

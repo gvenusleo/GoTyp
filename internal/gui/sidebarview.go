@@ -8,6 +8,15 @@ import (
 	"gotyp/internal/vault"
 )
 
+func (a *App) treeDropTarget(c *ui.Context, target ui.Element, dir string) {
+	if drag, ok := ui.DragOver[treeDrag](target); ok && drag.vault == a.vault && a.canMoveItem(drag.id, dir) {
+		target.Background(buttonFill(c.Theme()))
+	}
+	if drag, ok := ui.Drop[treeDrag](target); ok && drag.vault == a.vault {
+		a.moveItem(drag.id, dir)
+	}
+}
+
 func (a *App) sidebarView(c *ui.Context) {
 	ui.Themed(c, a.themes.sidebar).Fill().MinWidth(0).Children(func() {
 		t := c.Theme()
@@ -35,7 +44,7 @@ func (a *App) vaultButton(c *ui.Context) {
 	t := c.Theme()
 	root := a.vault.Root()
 	name := filepath.Base(root)
-	b := ui.ButtonBase(c).Label("切换仓库："+name).Tooltip(shortPath(root)).
+	b := ui.ButtonBase(c.Key("vault")).Label("切换仓库："+name).Tooltip(shortPath(root)).
 		Height(vaultHeight).Padding(0, t.Space(1.5)).Radius(t.Radius).MinWidth(0).Grow(1).Transition(hoverMotion)
 	switch {
 	case b.Pressed():
@@ -132,10 +141,30 @@ func sidebarEntry(c *ui.Context, svg *ui.SVG, label, keys string, primary bool) 
 	})
 }
 
+func (a *App) rootDropTarget(c *ui.Context, key string) {
+	target := ui.Box(c.Key(key)).Grow(1).MinHeight(rootDropHeight).Shrink(1).Label("移到仓库根目录")
+	drag, over := ui.DragOver[treeDrag](target)
+	valid := over && drag.vault == a.vault && a.canMoveItem(drag.id, "")
+	if valid {
+		target.Children(func() {
+			t := c.Theme()
+			inset := t.Space(2)
+			ui.Row(c.Key("root-drop-indicator")).Absolute().Left(inset).Right(inset).Bottom(0).
+				Height(rootDropHeight).Padding(0, inset).AlignItems(ui.Center).
+				Radius(t.Radius).Background(buttonFill(t)).IgnoreInput(true).Children(func() {
+				ui.Icon(c, iconFolderOpen).FontSize(iconSize).TextColor(t.TextMuted)
+			})
+		})
+	}
+	if dropped, ok := ui.Drop[treeDrag](target); ok && dropped.vault == a.vault {
+		a.moveItem(dropped.id, "")
+	}
+}
+
 func (a *App) treeView(c *ui.Context) {
 	tree := a.tree
 	if tree == nil || len(tree.Roots) == 0 {
-		ui.Spacer(c)
+		a.rootDropTarget(c, "tree-root-drop-empty")
 		return
 	}
 	t := c.Theme()
@@ -148,12 +177,12 @@ func (a *App) treeView(c *ui.Context) {
 	// 它只在本次构建中使用，构建完就清掉，不让应用状态留着捕获了 c 的闭包。
 	var prefix ui.OutlineRow
 	a.outline.Prefix = func(r ui.OutlineRow) {
-		ui.Box(c).Width(inset + float32(r.Depth)*indent).Shrink(0)
 		prefix = r
 	}
 	a.outline.List.Selected = &a.selectedRow
 	a.outline.List.Selection = &a.chosen
 	a.outline.List.Label = func(row int) string { return itemLabel(a.outline.Item(row)) }
+	a.outline.List.DragRows = a.dragTreeRow
 	clicked := ""
 	ui.Outline(c, &a.outline, tree.Roots, tree.Children, func(id string) {
 		dir := tree.Dirs[id]
@@ -166,7 +195,8 @@ func (a *App) treeView(c *ui.Context) {
 				clicked = id
 			}
 		}
-		row.Grow(1).MinWidth(0).Padding(t.Space(1.25), t.Space(2), t.Space(1.25), 0).Children(func() {
+		row.Grow(1).MinWidth(0).Padding(t.Space(1.25), t.Space(2), t.Space(1.25), inset+float32(prefix.Depth)*indent).
+			Radius(t.Radius).Children(func() {
 			ui.Row(c).Gap(gap).AlignItems(ui.Center).FillWidth().MinWidth(0).Children(func() {
 				svg := fileIcon(id)
 				switch {
@@ -179,7 +209,11 @@ func (a *App) treeView(c *ui.Context) {
 				ui.Text(c, itemLabel(id)).FontSize(textSize).SingleLine().Ellipsis("…").MinWidth(0)
 			})
 		}).ContextMenu(func(m *ui.Menu) { a.itemMenu(m, id) })
-	}).Grow(1).Padding(0, t.Space(2), t.Space(2), t.Space(2)).Label("笔记").OnChange(a.openSelected)
+		if dir {
+			a.treeDropTarget(c, row, id)
+		}
+	}).Shrink(0).Padding(0, t.Space(2), t.Space(2), t.Space(2)).Label("笔记").OnChange(a.openSelected)
+	a.rootDropTarget(c, "tree-root-drop")
 	a.outline.Prefix = nil
 	// 开关接走了点击，列表不会选中这一行，在这里选中被点的目录；树构建完才改选择。
 	if clicked != "" {

@@ -24,6 +24,7 @@ const (
 	tabInset                 = 4
 	tabGap                   = 2
 	tabFadeWidth             = 24
+	rootDropHeight           = 24
 	tabDragStep              = 10
 	statusHeight             = 24
 	statusItemHeight         = 20
