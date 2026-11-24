@@ -8,6 +8,14 @@ import (
 	"gotyp/internal/vault"
 )
 
+func (a *App) treeDrop(target ui.Element, dir string) (treeDrag, bool) {
+	drag, over := ui.DragOver[treeDrag](target)
+	if dropped, ok := ui.Drop[treeDrag](target); ok && dropped.vault == a.vault {
+		a.moveItem(dropped.id, dir)
+	}
+	return drag, over && drag.vault == a.vault
+}
+
 func (a *App) sidebarView(c *ui.Context) {
 	ui.Themed(c, a.themes.sidebar).Fill().MinWidth(0).Children(func() {
 		t := c.Theme()
@@ -20,7 +28,9 @@ func (a *App) sidebarView(c *ui.Context) {
 			sidebarEntry(c, iconPlus, "新建", "", true).Menu(a.newMenu)
 			sidebarEntry(c, iconSearch, "搜索", "⌘P", false).OnClick(a.openPalette)
 		})
-		a.treeView(c)
+		treeArea := ui.Column(c.Key("tree-area")).Grow(1).MinHeight(0)
+		drag, _ := ui.DragOver[treeDrag](treeArea)
+		treeArea.Children(func() { a.treeView(c, drag) })
 		// 设置按钮的图标与上面入口的图标中心对齐，离左边与离底边一样远。
 		inset := t.Space(3.5) + (entrySlot-barButton)/2
 		ui.Row(c).Shrink(0).Padding(0, inset, inset).Children(func() {
@@ -35,7 +45,7 @@ func (a *App) vaultButton(c *ui.Context) {
 	t := c.Theme()
 	root := a.vault.Root()
 	name := filepath.Base(root)
-	b := ui.ButtonBase(c).Label("切换仓库："+name).Tooltip(shortPath(root)).
+	b := ui.ButtonBase(c.Key("vault")).Label("切换仓库："+name).Tooltip(shortPath(root)).
 		Height(vaultHeight).Padding(0, t.Space(1.5)).Radius(t.Radius).MinWidth(0).Grow(1).Transition(hoverMotion)
 	switch {
 	case b.Pressed():
@@ -132,7 +142,37 @@ func sidebarEntry(c *ui.Context, svg *ui.SVG, label, keys string, primary bool) 
 	})
 }
 
-func (a *App) treeView(c *ui.Context) {
+func (a *App) rootDropTarget(c *ui.Context, drag treeDrag) {
+	target := ui.Box(c.Key("tree-root-drop")).Grow(1).MinHeight(rootDropHeight).Shrink(0).Label("移到" + vaultRootLabel)
+	rootDrag, over := a.treeDrop(target, "")
+	if over {
+		drag = rootDrag
+	}
+	if drag.vault != a.vault || !a.canMoveItem(drag.id, "") {
+		return
+	}
+	blocked := a.moveTargetError(drag.id, "") != ""
+	target.Children(func() {
+		t := c.Theme()
+		inset := t.Space(2)
+		indicator := ui.Row(c.Key("root-drop-indicator")).Absolute().Left(inset).Right(inset).Bottom(0).
+			Height(rootDropHeight).Padding(0, inset).Gap(t.Space(1.5)).AlignItems(ui.Center).
+			Radius(t.Radius).IgnoreInput(true)
+		if over && !blocked {
+			indicator.Background(pressFill(t))
+		}
+		indicator.Children(func() {
+			svg, color := iconFolderOpen, t.TextMuted
+			if blocked {
+				svg, color = iconCircleX, t.Danger
+			}
+			ui.Icon(c, svg).FontSize(iconSize).TextColor(color)
+			ui.Text(c, vaultRootLabel).FontSize(textSize).TextColor(t.TextMuted).SingleLine()
+		})
+	})
+}
+
+func (a *App) treeView(c *ui.Context, drag treeDrag) {
 	tree := a.tree
 	if tree == nil || len(tree.Roots) == 0 {
 		ui.Spacer(c)
@@ -148,14 +188,14 @@ func (a *App) treeView(c *ui.Context) {
 	// 它只在本次构建中使用，构建完就清掉，不让应用状态留着捕获了 c 的闭包。
 	var prefix ui.OutlineRow
 	a.outline.Prefix = func(r ui.OutlineRow) {
-		ui.Box(c).Width(inset + float32(r.Depth)*indent).Shrink(0)
 		prefix = r
 	}
 	a.outline.List.Selected = &a.selectedRow
 	a.outline.List.Selection = &a.chosen
 	a.outline.List.Label = func(row int) string { return itemLabel(a.outline.Item(row)) }
-	clicked := ""
-	ui.Outline(c, &a.outline, tree.Roots, tree.Children, func(id string) {
+	a.outline.List.DragRows = a.dragTreeRow
+	var clicked, hoveredFolder string
+	ui.Outline(c.Key("file-tree"), &a.outline, tree.Roots, tree.Children, func(id string) {
 		dir := tree.Dirs[id]
 		// 目录的整行内容就是 Outline 的展开开关，点在行上任何位置都会展开或收起；
 		// 文件行的点击交给列表，选中后打开。
@@ -166,26 +206,52 @@ func (a *App) treeView(c *ui.Context) {
 				clicked = id
 			}
 		}
-		row.Grow(1).MinWidth(0).Padding(t.Space(1.25), t.Space(2), t.Space(1.25), 0).Children(func() {
-			ui.Row(c).Gap(gap).AlignItems(ui.Center).FillWidth().MinWidth(0).Children(func() {
-				svg := fileIcon(id)
-				switch {
-				case dir && a.outline.Open.Has(id):
-					svg = iconFolderOpen
-				case dir:
-					svg = iconFolder
+		blocked := false
+		if dir {
+			if rowDrag, over := a.treeDrop(row, id); over {
+				drag = rowDrag
+				if a.canMoveItem(drag.id, id) {
+					blocked = a.moveTargetError(drag.id, id) != ""
+					if !blocked {
+						row.Background(pressFill(t))
+						hoveredFolder = id
+					}
 				}
-				ui.Icon(c, svg).FontSize(iconSize).TextColor(t.TextMuted)
-				ui.Text(c, itemLabel(id)).FontSize(textSize).SingleLine().Ellipsis("…").MinWidth(0)
-			})
-		}).ContextMenu(func(m *ui.Menu) { a.itemMenu(m, id) })
-	}).Grow(1).Padding(0, t.Space(2), t.Space(2), t.Space(2)).Label("笔记").OnChange(a.openSelected)
+			}
+		}
+		row.Grow(1).MinWidth(0).Padding(t.Space(1.25), t.Space(2), t.Space(1.25), inset+float32(prefix.Depth)*indent).
+			Radius(t.Radius).Children(func() { a.treeRowContent(c, id, gap, blocked) }).
+			ContextMenu(func(m *ui.Menu) { a.itemMenu(m, id) })
+	}).Shrink(1).MinHeight(0).Padding(0, t.Space(2), t.Space(2), t.Space(2)).Label("笔记").OnChange(a.openSelected)
+	a.rootDropTarget(c, drag)
+	if wait, opened := a.hoverTreeFolder(hoveredFolder, c.Now()); opened {
+		c.Invalidate()
+	} else if wait > 0 {
+		c.After(wait)
+	}
 	a.outline.Prefix = nil
 	// 开关接走了点击，列表不会选中这一行，在这里选中被点的目录；树构建完才改选择。
 	if clicked != "" {
 		a.chosen.Clear()
 		a.chosen.Add(clicked)
 	}
+}
+
+func (a *App) treeRowContent(c *ui.Context, id string, gap float32, blocked bool) {
+	t := c.Theme()
+	ui.Row(c).Gap(gap).AlignItems(ui.Center).FillWidth().MinWidth(0).Children(func() {
+		svg, color := fileIcon(id), t.TextMuted
+		switch {
+		case blocked:
+			svg, color = iconCircleX, t.Danger
+		case a.tree.Dirs[id] && a.outline.Open.Has(id):
+			svg = iconFolderOpen
+		case a.tree.Dirs[id]:
+			svg = iconFolder
+		}
+		ui.Icon(c, svg).FontSize(iconSize).TextColor(color)
+		ui.Text(c, itemLabel(id)).FontSize(textSize).SingleLine().Ellipsis("…").MinWidth(0)
+	})
 }
 
 // itemMenu 是文件树行的右键菜单。
@@ -198,6 +264,9 @@ func (a *App) itemMenu(m *ui.Menu, id string) {
 	m.Separator()
 	if m.Item("重命名…").Chosen() {
 		a.startRename(id)
+	}
+	if m.Item("移到…").Disabled(a.busy).Chosen() {
+		a.openMovePalette(id)
 	}
 	if m.Item("复制路径").Chosen() {
 		a.copyPath(id)

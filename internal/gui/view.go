@@ -47,6 +47,8 @@ func (a *App) handleShortcuts(c *ui.Context) {
 		a.stepTab(1)
 	case !a.menuReady && c.Shortcut(ui.Cmd, ui.KeyW):
 		a.closeActiveTab()
+	case !a.menuReady && c.Shortcut(ui.Cmd|ui.Shift, ui.KeyM):
+		a.openCurrentMovePalette()
 	case c.Shortcut(ui.Cmd, ui.Key1):
 		a.setMode(modeEdit)
 	case c.Shortcut(ui.Cmd, ui.Key2):

@@ -73,6 +73,10 @@ func (a *App) useVault(v *vault.Vault, tree *vault.Tree) {
 	a.selectedRow = -1
 	a.outline = ui.OutlineState[string]{}
 	a.chosen = ui.Selection[string]{}
+	a.dragHover = folderDragHover{}
+	if a.palette.moveID != "" {
+		a.palette = paletteState{}
+	}
 	w := a.state.Workspaces[v.Root()]
 	a.applyWorkspace(w)
 	a.state.Touch(v.Root())

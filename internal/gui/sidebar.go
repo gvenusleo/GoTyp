@@ -1,5 +1,49 @@
 package gui
 
+import (
+	"time"
+
+	"gotyp/internal/vault"
+)
+
+const vaultRootLabel = "仓库根目录"
+
+// treeDrag 只在发起拖动的仓库内有效。
+type treeDrag struct {
+	vault *vault.Vault
+	id    string
+}
+
+// dragTreeRow 让 Outline 继续负责点选和展开，拖动时只携带一个条目。
+func (a *App) dragTreeRow(rows []int) any {
+	if a.busy || len(rows) != 1 || rows[0] >= a.outline.Rows() {
+		return nil
+	}
+	a.dragHover = folderDragHover{}
+	return treeDrag{vault: a.vault, id: a.outline.Item(rows[0])}
+}
+
+type folderDragHover struct {
+	dir   string
+	until time.Time
+}
+
+// hoverTreeFolder 返回下一帧的等待时间，并在悬停满半秒时展开目录。
+func (a *App) hoverTreeFolder(dir string, now time.Time) (wait time.Duration, opened bool) {
+	if dir == "" || a.outline.Open.Has(dir) {
+		a.dragHover = folderDragHover{}
+		return 0, false
+	}
+	if a.dragHover.dir != dir {
+		a.dragHover = folderDragHover{dir, now.Add(500 * time.Millisecond)}
+	}
+	if wait = a.dragHover.until.Sub(now); wait > 0 {
+		return wait, false
+	}
+	a.outline.Open.Add(dir)
+	return 0, true
+}
+
 // revealInOutline 展开 id 的各级上级目录，让它在文件树中可见。
 func (a *App) revealInOutline(id string) {
 	for dir := parentDir(id); dir != ""; dir = parentDir(dir) {

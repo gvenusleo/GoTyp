@@ -2,6 +2,7 @@ package gui
 
 import (
 	"path"
+	"slices"
 	"strings"
 
 	"github.com/egoist/mygo"
@@ -112,46 +113,96 @@ func (a *App) commitRename() {
 	if ext := path.Ext(r.id); a.tree != nil && !a.tree.Dirs[r.id] && path.Ext(name) == "" {
 		name += ext
 	}
-	target := path.Join(parentDir(r.id), name)
-	for _, tab := range a.tabs {
-		if !affects(r.id, tab.id) && affects(target, tab.id) {
-			a.notify("重命名失败：目标路径已有打开的标签")
-			return
-		}
+	if a.relocationBlockedByTab(r.id, path.Join(parentDir(r.id), name)) {
+		a.notify("重命名失败：目标路径已有打开的标签")
+		return
 	}
 	v := a.vault
-	a.afterSaving(a.sessionsUnder(r.id), false, func() {
+	a.relocateItem(r.id, "重命名", func() (string, error) {
+		return v.Rename(r.id, name)
+	})
+}
+
+func (a *App) canMoveItem(id, dir string) bool {
+	tree := a.tree
+	return !a.busy && a.vault != nil && tree != nil && (tree.Dirs[id] || tree.Files[id]) &&
+		(dir == "" || tree.Dirs[dir]) && dir != parentDir(id) && !affects(id, dir)
+}
+
+func (a *App) moveTargetError(id, dir string) string {
+	target := path.Join(dir, path.Base(id))
+	switch {
+	case a.tree.Dirs[target] || a.tree.Files[target]:
+		return vault.ErrExists.Error()
+	case a.relocationBlockedByTab(id, target):
+		return "目标路径已有打开的标签"
+	}
+	return ""
+}
+
+func (a *App) moveItem(id, dir string) {
+	if !a.canMoveItem(id, dir) {
+		return
+	}
+	if reason := a.moveTargetError(id, dir); reason != "" {
+		a.notify("移动失败：" + reason)
+		return
+	}
+	v := a.vault
+	a.relocateItem(id, "移动", func() (string, error) {
+		return v.Move(id, dir)
+	})
+}
+
+func (a *App) relocationBlockedByTab(from, target string) bool {
+	for _, tab := range a.tabs {
+		if !affects(from, tab.id) && affects(target, tab.id) {
+			return true
+		}
+	}
+	return false
+}
+
+// relocateItem 先保存受影响的会话，再让文件树与标签跟随磁盘上的路径变更。
+func (a *App) relocateItem(from, action string, change func() (string, error)) {
+	v := a.vault
+	a.afterSaving(a.sessionsUnder(from), false, func() {
 		a.busy = true
 		go func() {
-			id, err := v.Rename(r.id, name)
+			id, err := change()
 			a.publish(func() {
 				if a.vault != v {
 					return
 				}
 				a.busy = false
 				if err != nil {
-					a.notify("重命名失败：" + err.Error())
+					a.notify(action + "失败：" + err.Error())
 					return
 				}
-				a.renamed(r.id, id)
+				a.itemRelocated(from, id)
 				a.rescan()
 			})
 		}()
 	})
 }
 
-// renamed 保留标签顺序，并按新的扩展名选择打开方式。
-func (a *App) renamed(from, to string) {
-	if a.outline.Open.Has(from) {
-		a.outline.Open.Remove(from)
-		a.outline.Open.Add(to)
+// itemRelocated 保留标签顺序，并按新路径选择打开方式。
+func (a *App) itemRelocated(from, to string) {
+	for _, dir := range slices.Collect(a.outline.Open.All()) {
+		if affects(from, dir) {
+			a.outline.Open.Remove(dir)
+			a.outline.Open.Add(to + strings.TrimPrefix(dir, from))
+		}
+	}
+	if parentDir(from) != parentDir(to) {
+		a.revealInOutline(to)
 	}
 	for _, tab := range a.tabs {
 		if !affects(from, tab.id) {
 			continue
 		}
 		tab.id = to + strings.TrimPrefix(tab.id, from)
-		// 改名期间的监听结果仍指向旧路径，保留刷新请求直到用新路径核对。
+		// 在途的监听结果仍指向旧路径，用新路径重新核对已加载的文件。
 		tab.changed, tab.checking = tab.loaded(), false
 		if tab == a.activeTab {
 			a.stopPreview(a.current)

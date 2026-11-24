@@ -23,7 +23,7 @@ func (a *App) paletteView(c *ui.Context) {
 		list, selected := a.paletteList(c, results, min(paletteHeight, height-paletteTop-90))
 		// 键盘焦点一直在输入框里：告诉读屏它控制下面的结果，↑↓ 停在的是哪一项。
 		input.Expanded(len(results) > 0).Controls(list).ActiveDescendant(selected)
-		paletteHelp(c, a.palette.headingMode)
+		paletteHelp(c, a.palette.headingMode, a.palette.moveID != "")
 	})
 }
 
@@ -33,8 +33,11 @@ func (a *App) paletteInput(c *ui.Context) ui.Element {
 	t := c.Theme()
 	var input ui.Element
 	placeholder := "搜索笔记"
-	if a.palette.headingMode {
+	switch {
+	case a.palette.headingMode:
 		placeholder = "跳到标题"
+	case a.palette.moveID != "":
+		placeholder = "选择目标文件夹"
 	}
 	ui.Row(c).AlignItems(ui.Center).Gap(t.Space(2.5)).Padding(t.Space(3), t.Space(4)).
 		BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
@@ -53,8 +56,11 @@ func (a *App) paletteList(c *ui.Context, results []string, maxHeight float32) (l
 	p := &a.palette
 	if len(results) == 0 {
 		empty := "没有匹配的笔记"
-		if p.headingMode {
+		switch {
+		case p.headingMode:
 			empty = "没有匹配的标题"
+		case p.moveID != "":
+			empty = "没有可选的目标文件夹"
 		}
 		ui.Text(c, empty).FontSize(textSize).TextColor(t.TextMuted).
 			Padding(t.Space(6)).TextAlign(ui.Center).FillWidth()
@@ -74,7 +80,7 @@ func (a *App) paletteList(c *ui.Context, results []string, maxHeight float32) (l
 					n, _ := strconv.Atoi(id)
 					row = headingRow(c, n, p.headings[n], choose)
 				} else {
-					row = paletteRow(c, id, choose)
+					row = paletteRow(c, id, p.moveID != "", choose)
 				}
 				if x, y, over := row.PointerPosition(); over {
 					b := row.Bounds()
@@ -96,16 +102,23 @@ func (a *App) paletteList(c *ui.Context, results []string, maxHeight float32) (l
 }
 
 // paletteRow 画一行结果：类型图标、文件名和所在目录。点击不夺走输入框的焦点。
-func paletteRow(c *ui.Context, id string, choose func()) ui.Element {
+func paletteRow(c *ui.Context, id string, folder bool, choose func()) ui.Element {
 	t := c.Theme()
+	name, label := path.Base(id), id
+	if id == "" {
+		name, label = vaultRootLabel, vaultRootLabel
+	}
 	svg := fileIcon(id)
-	row := ui.ButtonBase(c.Key(id)).Label(id).Role(ui.RoleOption).KeepFocus().
+	if folder {
+		svg = iconFolder
+	}
+	row := ui.ButtonBase(c.Key(id)).Label(label).Role(ui.RoleOption).KeepFocus().
 		Padding(t.Space(1.5), t.Space(2.5)).Radius(t.Radius).
 		Justify(ui.Start).AlignItems(ui.Center).Gap(t.Space(2.5))
 	row.OnClick(choose)
 	row.Children(func() {
 		ui.Icon(c, svg).FontSize(iconSize).TextColor(t.TextMuted).Shrink(0)
-		ui.Text(c, path.Base(id)).FontSize(textSize).SingleLine().Ellipsis("…").Grow(1).MinWidth(0)
+		ui.Text(c, name).FontSize(textSize).SingleLine().Ellipsis("…").Grow(1).MinWidth(0)
 		if dir := parentDir(id); dir != "" {
 			ui.Text(c, dir).FontSize(detailFontSize).TextColor(t.TextMuted).
 				SingleLine().Ellipsis("…").Shrink(0).MaxWidthPercent(paletteDirWidthPercent)
@@ -129,11 +142,14 @@ func headingRow(c *ui.Context, i int, h tinymist.Heading, choose func()) ui.Elem
 }
 
 // paletteHelp 画底部的按键提示。
-func paletteHelp(c *ui.Context, headings bool) {
+func paletteHelp(c *ui.Context, headings, moving bool) {
 	t := c.Theme()
 	open := "↵ 打开"
-	if headings {
+	switch {
+	case headings:
 		open = "↵ 跳转"
+	case moving:
+		open = "↵ 移动"
 	}
 	ui.Row(c).Gap(t.Space(4)).Padding(t.Space(2), t.Space(4)).
 		BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {
