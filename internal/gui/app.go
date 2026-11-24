@@ -49,9 +49,8 @@ type App struct {
 	diags      map[string][]tinymist.Diagnostic
 	diagReport diagReport
 	// preview 随窗口创建，切换笔记只替换 PDF 文档。
-	preview      pdfpreview.Viewer
-	previewError string
-	lspSeq       uint64
+	preview *pdfpreview.Viewer
+	lspSeq  uint64
 	// pendingJump 是打开另一篇笔记后要移动到的位置，见 typstedit.go。
 	pendingJump  *noteJump
 	symbolRename symbolRenameState
@@ -77,7 +76,9 @@ type App struct {
 	tabScroll     ui.ScrollState
 	current       *session
 	// viewing 是当前打开的图片或无法以文本打开的文件，与 current 至多一个不为空。
-	viewing *viewer
+	viewing        *viewer
+	readingPDF     string
+	pdfReadChanged bool
 
 	// focus 只在会话内生效，不写入工作区状态。
 	focus bool
@@ -132,22 +133,37 @@ func Run() error {
 		a.win.OnClose(a.beforeClose)
 		a.win.OnClosed(func() {
 			a.stopPreview(a.current)
+			a.viewing.cancelPDF()
 			a.cancel()
 			a.stopLSP()
-			if a.preview != nil {
-				a.preview.Close()
-			}
+			a.preview.Close()
 		})
-		var err error
-		a.preview, err = pdfpreview.NewViewer()
-		if err != nil {
-			a.previewError = "无法创建 PDF 预览：" + err.Error()
-		}
+		a.preview = pdfpreview.NewViewer(a.win.Update)
+		a.trackPDFScale()
 		if len(a.state.Recent) > 0 {
 			a.startOpenVault(a.state.Recent[0])
 		}
 	})
-	return mygo.App.Run()
+	err := mygo.App.Run()
+	if a.preview != nil {
+		a.preview.Close()
+		<-a.preview.Done()
+	}
+	return err
+}
+
+func (a *App) trackPDFScale() {
+	win, preview := a.win, a.preview
+	update := func() {
+		if preview.SetScale(mygo.Screen.DisplayMatching(win.Bounds()).ScaleFactor) {
+			win.Invalidate()
+		}
+	}
+	off := mygo.Screen.OnDisplaysChanged(update)
+	win.OnClosed(off)
+	win.OnMove(update)
+	win.OnResize(update)
+	update()
 }
 
 func (a *App) setMenu() {

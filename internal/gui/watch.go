@@ -68,11 +68,14 @@ func (a *App) filesChanged(v *vault.Vault, events []mygo.FileEvent) {
 		written = append(written, e.Path)
 	}
 	a.refreshTitles(written)
-	for _, tab := range a.tabs {
-		for _, e := range events {
-			if e.Op == mygo.FileHint || affects(e.Path, tab.id) || affects(e.OldPath, tab.id) {
+	for _, e := range events {
+		if a.readingPDF != "" && watchAffects(e, a.readingPDF) {
+			a.pdfReadChanged = true
+		}
+		for _, tab := range a.tabs {
+			if watchAffects(e, tab.id) {
 				tab.changed = true
-				break
+				tab.viewer.cancelPDF()
 			}
 		}
 	}
@@ -87,6 +90,10 @@ func (a *App) filesChanged(v *vault.Vault, events []mygo.FileEvent) {
 		}
 	}
 	a.checkTabs()
+}
+
+func watchAffects(event mygo.FileEvent, id string) bool {
+	return event.Op == mygo.FileHint || affects(event.Path, id) || affects(event.OldPath, id)
 }
 
 // refreshTitles 在后台重新读取被写入笔记的标题。

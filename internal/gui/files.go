@@ -208,7 +208,7 @@ func (a *App) itemRelocated(from, to string) {
 			a.stopPreview(a.current)
 			a.detachLSP(a.current)
 		}
-		if s := tab.session; s != nil && !isImage(tab.id) {
+		if s := tab.session; s != nil && !isImage(tab.id) && !isPDF(tab.id) {
 			s.id = tab.id
 			s.updateLanguage()
 			if s.kind == vault.KindMarkdown {

@@ -27,16 +27,24 @@ func (a *App) markdownPreviewView(c *ui.Context, s *session) {
 	})
 }
 
-// typstPreviewView 显示原生 PDF 视图；尚未成功编译时显示加载或错误状态。
+// typstPreviewView 显示 PDF 页面，首次加载时显示进度或错误。
 func (a *App) typstPreviewView(c *ui.Context, s *session) {
 	t := c.Theme()
 	ui.Column(c).Grow(1).MinWidth(0).Background(t.Surface).Label("Typst 预览").Children(func() {
 		a.diagnosticsView(c, s)
-		if s.previewReady && a.preview != nil {
-			ui.NativeView(c, a.preview).Grow(1)
-			return
-		}
-		a.typstEmptyView(c, s)
+		ui.Column(c.Key(s.id)).Grow(1).MinWidth(0).MinHeight(0).Children(func() {
+			if a.preview != nil {
+				layout := struct {
+					mode                      int
+					width, split              float32
+					focus, diagnostics, alert bool
+				}{a.mode, a.contentWidth(c), a.editorPercent, a.focus, s.previewErrOpen && a.diagReport.text != "", s.conflict || s.err != ""}
+				a.preview.View(c.Key("pdf"), layout, nil)
+			}
+			if !s.previewReady {
+				a.typstEmptyView(c, s)
+			}
+		})
 	})
 }
 
@@ -65,10 +73,8 @@ func (a *App) diagnosticsView(c *ui.Context, s *session) {
 
 func (a *App) typstEmptyView(c *ui.Context, s *session) {
 	t := c.Theme()
-	ui.Column(c).Grow(1).Center().Padding(emptyInset).Children(func() {
+	ui.Column(c.Key("pdf-status")).Absolute().Fill().Center().Padding(emptyInset).Children(func() {
 		switch {
-		case a.preview == nil:
-			ui.Text(c, a.previewError).TextColor(t.TextMuted)
 		case s.previewErr != "":
 			ui.Text(c, s.previewErr).TextColor(t.TextMuted).Selectable()
 		case s.previewStarting:

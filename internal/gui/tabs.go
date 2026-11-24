@@ -113,11 +113,26 @@ func (a *App) activateTab(tab *fileTab) {
 		a.detachLSP(a.current)
 	}
 	previous := a.activeTab
+	previousView := a.viewing
+	if viewing != previousView {
+		previousView.cancelPDF()
+	}
+	loadPDF := viewing != nil && isPDF(viewing.id) && viewing != previousView
+	if a.preview != nil && previousView != nil && isPDF(previousView.id) && viewing != previousView {
+		if loadPDF && previous == tab && previousView.id == viewing.id {
+			viewing.pdfReady = previousView.pdfReady
+		} else {
+			a.preview.Clear()
+		}
+	}
 	if previous != nil && previous != tab && previous.viewer != nil {
 		// 只读文件下次激活时重读，及时释放可能很大的图片。
 		previous.viewer, previous.checking = nil, false
 	}
 	a.activeTab, a.current, a.viewing = tab, next, viewing
+	if loadPDF {
+		a.loadPDF(viewing)
+	}
 	a.tabIndex = max(0, slices.Index(a.tabs, tab))
 	a.revealTab = tab != nil && previous != tab
 	if next != nil {

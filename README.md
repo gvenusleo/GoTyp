@@ -4,13 +4,13 @@ GoTyp 是用 Go 编写的本地笔记应用，界面由 MyGo Native UI 绘制。
 
 - Markdown 有编辑、分屏、预览三种模式，支持本地和 HTTP(S) 图片，以及笔记间的相对链接
 - Typst 随输入实时更新分页预览，显示编译错误，支持补全和悬停文档。导出 PDF 使用磁盘上已保存的版本
-- 仓库里的其他文件也在文件树中：纯文本直接编辑，图片在应用内显示，其余交给系统默认应用
+- 仓库里的其他文件也在文件树中。纯文本直接编辑，图片和 PDF 在只读标签中显示，其余交给系统默认应用
 - 在「设置」的「编辑」页可关闭编辑时自动保存。切换标签时可以保留内存中的编辑。关闭标签、切换仓库或退出时，会尝试保存受影响的文件。写入前检查外部修改，再原子替换文件
 - 笔记就是仓库里的原始文件，GoTyp 不往仓库里写自己的文件
 
 ## 依赖
 
-Typst 预览、PDF 导出和编辑辅助都使用 `PATH` 中的 tinymist。缺少 tinymist 时，仍可编辑和保存 Typst 笔记。[tinymist 项目](https://github.com/Myriad-Dreamin/tinymist)
+Typst 预览、PDF 导出和编辑辅助都使用 `PATH` 中的 tinymist。缺少 tinymist 时，仍可编辑和保存 Typst 笔记。预览所需的 PDFium 随安装包分发。[tinymist 项目](https://github.com/Myriad-Dreamin/tinymist)
 
 从访达或程序坞启动的应用拿不到 shell 配置的 `PATH`，所以 GoTyp 启动时会额外查找 `/opt/homebrew/bin`、`/usr/local/bin`、`~/.cargo/bin`、`~/.local/bin` 和 mise 的 shims 目录。
 
@@ -23,6 +23,13 @@ mise run dev       # 启动桌面应用，热重载
 mise run build     # 编译安装包，输出到 build/
 mise run install   # 编译并安装到 /Applications（macOS）
 mise run ci        # 格式检查、vet、测试、编译、漏洞扫描
+```
+
+`mise run dev` 和 `mise run build` 会为当前平台下载并校验 PDFium。交叉构建时先准备目标架构的资源。`-platform` 支持 macOS、Linux（glibc）和 Windows 的 `amd64` 与 `arm64`。
+
+```sh
+mise exec -- go run ./cmd/pdfium-resources -platform=linux/amd64
+mise exec -- go tool mygo build -platform linux/amd64
 ```
 
 ## 数据
@@ -38,6 +45,7 @@ mise run ci        # 格式检查、vet、测试、编译、漏洞扫描
 | `cmd/gotyp` | 组装依赖并启动应用 |
 | `internal/vault` | 仓库路径、扫描、读取、原子保存和冲突检查，不依赖界面 |
 | `internal/tinymist` | tinymist 进程、编辑辅助、实时预览和已保存笔记的 PDF 导出 |
+| `internal/pdfpreview` | PDFium 加载、后台渲染和 MyGo PDF 查看器 |
 | `internal/gui` | 应用状态、用户动作和界面 |
 
 ## 许可

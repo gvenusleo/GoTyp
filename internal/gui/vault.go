@@ -63,6 +63,10 @@ func (a *App) startOpenVault(root string) {
 // useVault 切换到已扫描好的仓库，并恢复它上次的界面状态和笔记。
 func (a *App) useVault(v *vault.Vault, tree *vault.Tree) {
 	a.stopPreview(a.current)
+	a.viewing.cancelPDF()
+	if a.preview != nil && a.viewing != nil && isPDF(a.viewing.id) {
+		a.preview.Clear()
+	}
 	a.detachLSP(a.current)
 	a.startLSP(v.Root())
 	a.vault, a.tree, a.current, a.viewing = v, tree, nil, nil
@@ -128,6 +132,10 @@ func (a *App) loadSession(id string) {
 	generation := a.generation
 	a.busy = true
 	a.err = ""
+	a.readingPDF, a.pdfReadChanged = "", false
+	if isPDF(id) {
+		a.readingPDF = id
+	}
 	go func() {
 		source, st, vw, err := readFile(v, id)
 		a.publish(func() {
@@ -135,6 +143,12 @@ func (a *App) loadSession(id string) {
 				return
 			}
 			a.busy = false
+			changed := a.pdfReadChanged
+			a.readingPDF, a.pdfReadChanged = "", false
+			if changed {
+				a.loadSession(id)
+				return
+			}
 			switch {
 			case err != nil:
 				// 跳转只对这次打开有效，失败后不能留到以后手动打开同一篇笔记时才生效。

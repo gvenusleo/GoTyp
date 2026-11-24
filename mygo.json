@@ -4,6 +4,7 @@
   "version": "0.0.1",
   "main": "./cmd/gotyp",
   "out": "build",
+  "linux": { "webview": false },
   "macos": {
     "signingIdentity": "FA69ED0C1AE020718C546994B3AB48450341180F",
     "infoPlist": {

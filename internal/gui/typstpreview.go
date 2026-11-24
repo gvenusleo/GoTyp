@@ -79,6 +79,10 @@ func (a *App) receivePDF(client *tinymist.Client, doc tinymist.Document, data []
 			return false
 		}
 		s.previewVersion = doc.Version
+		if s.previewCancel != nil {
+			s.previewCancel()
+			s.previewCancel = nil
+		}
 		s.previewMissing = errors.Is(err, tinymist.ErrUnavailable)
 		s.previewErr = "无法更新 Typst 预览：" + err.Error()
 		a.refreshMenu()
@@ -93,25 +97,30 @@ func (a *App) receivePDF(client *tinymist.Client, doc tinymist.Document, data []
 	ctx, cancel := context.WithCancel(s.lspContext)
 	s.previewCancel = cancel
 	s.previewVersion = doc.Version
-	viewer := a.preview
-	go func() {
-		err := viewer.Load(ctx, data)
-		a.publish(func() { a.finishPDF(s, client, doc, ctx, err) })
-	}()
+	a.preview.Load(ctx, data, func(err error) bool {
+		return a.finishPDF(s, client, doc, ctx, err)
+	})
 	return true
 }
 
-func (a *App) finishPDF(s *session, client *tinymist.Client, doc tinymist.Document, ctx context.Context, err error) {
+func (a *App) finishPDF(s *session, client *tinymist.Client, doc tinymist.Document, ctx context.Context, err error) bool {
 	if a.ctx.Err() != nil || ctx.Err() != nil || a.current != s || a.lsp != client ||
 		s.lspID != doc.Session || s.ed.Buffer.Version() != doc.Version {
-		return
+		return false
 	}
+	s.previewCancel()
+	s.previewCancel = nil
 	s.previewStarting = false
+	if s.previewMissing {
+		s.previewMissing = false
+		a.refreshMenu()
+	}
 	if err != nil {
 		s.previewErr = "无法显示 Typst 预览：" + err.Error()
-		return
+		return false
 	}
-	s.previewReady, s.previewMissing, s.previewErr = true, false, ""
+	s.previewReady, s.previewErr = true, ""
+	return true
 }
 
 func (a *App) stopPreview(s *session) {
