@@ -96,6 +96,44 @@ func TestMoveRejectsSymlinkOutside(t *testing.T) {
 	}
 }
 
+func TestMovePreservesRelativeSymlinkTarget(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("创建符号链接可能需要额外权限")
+	}
+	v := openTestVault(t)
+	createTestNote(t, v, "source/note.md", "原文")
+	createTestNote(t, v, "target/note.md", "另一篇笔记")
+	createTestNote(t, v, "shared.md", "共用笔记")
+	for id, target := range map[string]string{"source/local.md": "note.md", "source/shared-link.md": "../shared.md"} {
+		if err := os.Symlink(filepath.FromSlash(target), filepath.Join(v.Root(), filepath.FromSlash(id))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := v.Move("source/local.md", "target"); err == nil {
+		t.Fatal("允许移动会指向另一篇笔记的链接")
+	}
+	if _, err := v.Move("source", "target"); err == nil {
+		t.Fatal("允许移动含有相对外链的目录")
+	}
+	if got, _, err := v.Read("source/local.md"); err != nil || got != "原文" {
+		t.Fatalf("被拒绝的移动改变了原链接：%q，%v", got, err)
+	}
+	id, err := v.Move("source/shared-link.md", "target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _, err := v.Read(id); err != nil || got != "共用笔记" {
+		t.Fatalf("移动后的链接没有指向原文件：%q，%v", got, err)
+	}
+	id, err = v.Move("source", "target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _, err := v.Read(id + "/local.md"); err != nil || got != "原文" {
+		t.Fatalf("目录中的链接没有指向原文件：%q，%v", got, err)
+	}
+}
+
 // 一个无法读取的子目录不能让整个仓库打不开。
 func TestScanSkipsUnreadableDir(t *testing.T) {
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {

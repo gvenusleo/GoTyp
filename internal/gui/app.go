@@ -61,6 +61,7 @@ type App struct {
 	outline     ui.OutlineState[string]
 	chosen      ui.Selection[string]
 	selectedRow int
+	dragHover   folderDragHover
 
 	sidebarWidth float32
 	// sidebarShown 是侧栏展开程度：1 完全展开，0 完全收起，动画中取中间值。
@@ -179,6 +180,7 @@ func (a *App) setMenu() {
 			{Label: "保存", Accelerator: "CmdOrCtrl+S", Click: action(a.saveCurrent)},
 			{Label: "导出 PDF…", Accelerator: "CmdOrCtrl+E", Click: action(a.exportPDFDialog)},
 			mygo.Separator(),
+			{Label: "移动当前文件…", Accelerator: "CmdOrCtrl+Shift+M", Disabled: a.activeTab == nil, Click: action(a.openCurrentMovePalette)},
 			{Label: "在文件管理器中显示", Click: action(a.revealCurrent)},
 			{Label: "复制路径", Accelerator: "CmdOrCtrl+Shift+C", Click: action(a.copyCurrentPath)},
 			mygo.Separator(),

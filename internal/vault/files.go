@@ -118,6 +118,9 @@ func (v *Vault) Move(id, dir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := checkMoveLinks(from, to); err != nil {
+		return "", err
+	}
 	if err := moveEntry(from, to); err != nil {
 		if errors.Is(err, fs.ErrExist) {
 			return "", ErrExists

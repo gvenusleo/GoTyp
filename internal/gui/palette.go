@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"maps"
 	"path"
 	"slices"
 	"strconv"
@@ -27,6 +28,7 @@ type paletteState struct {
 	results []string
 	forTree *vault.Tree
 	forText string
+	moveID  string
 	// headingMode 为真时面板列出当前笔记的标题，结果是 headings 的下标，见 typstedit.go。
 	// 用单独的标志而不是看 headings 是否为空：没有标题的笔记也要停留在标题模式。
 	headingMode     bool
@@ -43,6 +45,25 @@ func (a *App) openPalette() {
 		return
 	}
 	a.palette = paletteState{open: true, pointer: noPointer}
+}
+
+func (a *App) openCurrentMovePalette() {
+	a.openMovePalette(a.openID())
+}
+
+func (a *App) openMovePalette(id string) {
+	if id == "" || a.busy || a.tree == nil || (!a.tree.Dirs[id] && !a.tree.Files[id]) {
+		return
+	}
+	a.palette = paletteState{open: true, pointer: noPointer, moveID: id}
+}
+
+func (a *App) moveDestinations(id string) []string {
+	dirs := []string{""}
+	dirs = append(dirs, slices.Sorted(maps.Keys(a.tree.Dirs))...)
+	return slices.DeleteFunc(dirs, func(dir string) bool {
+		return !a.canMoveItem(id, dir) || a.moveTargetError(id, dir) != ""
+	})
 }
 
 // pointerTo 记下指针在窗口中的位置，它正在第 i 行上。只有指针真的移动了才高亮这一行，
@@ -80,8 +101,18 @@ func (a *App) paletteResults() []string {
 		score int
 	}
 	var found []match
-	for _, id := range files(a.tree) {
-		if score, ok := matchScore(strings.ToLower(path.Base(id)), strings.ToLower(id+" "+a.tree.Titles[id]), query); ok {
+	var items []string
+	if p.moveID != "" {
+		items = a.moveDestinations(p.moveID)
+	} else {
+		items = files(a.tree)
+	}
+	for _, id := range items {
+		name, description := path.Base(id), id+" "+a.tree.Titles[id]
+		if id == "" {
+			name, description = vaultRootLabel, vaultRootLabel
+		}
+		if score, ok := matchScore(strings.ToLower(name), strings.ToLower(description), query); ok {
 			// 匹配程度相同时笔记排在其他文件前面。
 			score *= 2
 			if _, note := a.tree.Titles[id]; !note {
@@ -168,6 +199,10 @@ func (a *App) choosePalette() {
 	if a.palette.headingMode {
 		i, _ := strconv.Atoi(results[a.palette.index])
 		a.chooseHeading(i)
+		return
+	}
+	if a.palette.moveID != "" {
+		a.moveItem(a.palette.moveID, results[a.palette.index])
 		return
 	}
 	a.openNote(results[a.palette.index])

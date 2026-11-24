@@ -2,9 +2,12 @@ package gui
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"strings"
 	"testing"
+
+	"github.com/egoist/mygo/ui"
 )
 
 func TestMoveFolderSavesOpenNotes(t *testing.T) {
@@ -74,5 +77,37 @@ func TestMoveStopsOnSaveConflict(t *testing.T) {
 	got, _, err := a.vault.Read("note.md")
 	if err != nil || got != "外部修改" || a.busy || !s.conflict || s.text() != "未保存的改动" || a.openID() != "note.md" {
 		t.Fatalf("保存冲突后原路径或编辑状态异常：磁盘 %q，错误 %v", got, err)
+	}
+}
+
+func TestLongFileTreeKeepsSidebarControlsVisible(t *testing.T) {
+	a, _ := newTestApp(t, "原文")
+	folder, err := a.vault.CreateFolder("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 90 {
+		if _, err := a.vault.Create(fmt.Sprintf("%s/笔记-%02d.md", folder, i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if a.tree, err = a.vault.Scan(); err != nil {
+		t.Fatal(err)
+	}
+	a.outline.Open.Add(folder)
+	tt := ui.NewTester(a.view, 840, 480)
+	for _, label := range []string{"设置", "移到" + vaultRootLabel} {
+		if box, ok := tt.Find(label); !ok || box.H == 0 || box.Y+box.H > 480 {
+			t.Fatalf("%q未保留在窗口内：%+v", label, box)
+		}
+	}
+	bounds, ok := tt.Find("笔记")
+	if !ok {
+		t.Fatal("文件树不可见")
+	}
+	tt.Scroll(bounds.X+bounds.W/2, bounds.Y+bounds.H/2, 0, 2400)
+	first, last := a.outline.List.Visible()
+	if first <= 0 || last != a.outline.Rows()-1 {
+		t.Fatalf("未滚动到文件树末尾：%d 到 %d，共 %d 行", first, last, a.outline.Rows())
 	}
 }

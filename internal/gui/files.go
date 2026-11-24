@@ -113,8 +113,12 @@ func (a *App) commitRename() {
 	if ext := path.Ext(r.id); a.tree != nil && !a.tree.Dirs[r.id] && path.Ext(name) == "" {
 		name += ext
 	}
+	if a.relocationBlockedByTab(r.id, path.Join(parentDir(r.id), name)) {
+		a.notify("重命名失败：目标路径已有打开的标签")
+		return
+	}
 	v := a.vault
-	a.relocateItem(r.id, path.Join(parentDir(r.id), name), "重命名", func() (string, error) {
+	a.relocateItem(r.id, "重命名", func() (string, error) {
 		return v.Rename(r.id, name)
 	})
 }
@@ -125,24 +129,42 @@ func (a *App) canMoveItem(id, dir string) bool {
 		(dir == "" || tree.Dirs[dir]) && dir != parentDir(id) && !affects(id, dir)
 }
 
+func (a *App) moveTargetError(id, dir string) string {
+	target := path.Join(dir, path.Base(id))
+	switch {
+	case a.tree.Dirs[target] || a.tree.Files[target]:
+		return vault.ErrExists.Error()
+	case a.relocationBlockedByTab(id, target):
+		return "目标路径已有打开的标签"
+	}
+	return ""
+}
+
 func (a *App) moveItem(id, dir string) {
 	if !a.canMoveItem(id, dir) {
 		return
 	}
+	if reason := a.moveTargetError(id, dir); reason != "" {
+		a.notify("移动失败：" + reason)
+		return
+	}
 	v := a.vault
-	a.relocateItem(id, path.Join(dir, path.Base(id)), "移动", func() (string, error) {
+	a.relocateItem(id, "移动", func() (string, error) {
 		return v.Move(id, dir)
 	})
 }
 
-// relocateItem 先保存受影响的会话，再让文件树与标签跟随磁盘上的路径变更。
-func (a *App) relocateItem(from, target, action string, change func() (string, error)) {
+func (a *App) relocationBlockedByTab(from, target string) bool {
 	for _, tab := range a.tabs {
 		if !affects(from, tab.id) && affects(target, tab.id) {
-			a.notify(action + "失败：目标路径已有打开的标签")
-			return
+			return true
 		}
 	}
+	return false
+}
+
+// relocateItem 先保存受影响的会话，再让文件树与标签跟随磁盘上的路径变更。
+func (a *App) relocateItem(from, action string, change func() (string, error)) {
 	v := a.vault
 	a.afterSaving(a.sessionsUnder(from), false, func() {
 		a.busy = true
