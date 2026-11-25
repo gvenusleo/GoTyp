@@ -14,9 +14,9 @@ GoTyp 是用 Go 和 MyGo Native UI 编写的本地笔记应用。唯一的产品
 - `cmd/gotyp` 只负责组装依赖和启动应用，不放业务逻辑或界面。
 - `internal/vault` 负责仓库路径、扫描、读取、原子保存和冲突检查，不 import MyGo 或 GUI。
 - `internal/tinymist` 负责 tinymist 进程、JSON-RPC、文本同步、坐标换算、预览任务、编辑辅助和 PDF 导出，输出自己的类型，不 import GUI 或 MyGo。
-- `internal/pdfpreview` 负责 PDFium 动态加载、后台渲染和 MyGo 查看器，不依赖 GUI。
+- MyGo PDF 负责 PDFium 动态加载、后台渲染和查看器。GoTyp 负责预览任务、文件关联和版本校验。
 - `internal/gui` 负责应用状态、用户动作和 Native UI。状态与动作放在 `xxx.go`，界面构建放在对应的 `xxxview.go`。
-- `internal/gui` 可以使用 `internal/vault`、`internal/tinymist` 和 `internal/pdfpreview`，这些包不能反向依赖 GUI。
+- `internal/gui` 可以使用 `internal/vault`、`internal/tinymist` 和 MyGo PDF，这些包不能反向依赖 GUI。
 - Markdown 与 Typst 保留两条明确的预览分支，不引入通用渲染接口。
 
 ## 编码规范
@@ -55,7 +55,7 @@ Go 工具通过 mise 运行：
 | `mise run fmt` | 格式化 Go 文件 |
 | `mise run fmt-check` | 检查格式 |
 | `mise run vet` | 运行 `go vet` 和 `mygo vet` |
-| `mise run test` | 准备本机 PDFium 并运行带竞态检测的 Go 测试 |
+| `mise run test` | 运行带竞态检测的 Go 测试 |
 | `mise run test-nocgo` | 验证无 cgo 构建与测试 |
 | `mise run build` | 编译安装包 |
 | `mise run ci` | 运行完整检查 |

@@ -10,8 +10,6 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
-
-	"gotyp/internal/pdfpreview"
 )
 
 func TestMarkdownLinkToUnindexedPDF(t *testing.T) {
@@ -99,8 +97,6 @@ func TestPDFReadFailureEndsLoading(t *testing.T) {
 	t.Cleanup(cancel)
 	vw := &viewer{id: id, pdfCancel: cancel}
 	a.showViewer(vw)
-	a.preview = pdfpreview.NewViewer(func(func()) {})
-	t.Cleanup(func() { a.preview.Close(); <-a.preview.Done() })
 	if err := os.Symlink(target, filepath.Join(a.vault.Root(), id)); err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +106,7 @@ func TestPDFReadFailureEndsLoading(t *testing.T) {
 	publishedResult(t, results)
 	view := ui.NewTester(func(c *ui.Context) { a.pdfFileView(c, a.viewing) }, 400, 400)
 	view.Frame()
-	if _, spinning := view.Find("正在打开 PDF"); spinning || ctx.Err() == nil || a.viewing.note == "" {
+	if _, spinning := view.Find("正在打开 PDF"); spinning || ctx.Err() == nil || a.viewing.note == "" || a.viewing.pdfCancel != nil {
 		t.Fatal("取消加载后未显示重读失败的状态")
 	}
 }

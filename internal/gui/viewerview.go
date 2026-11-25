@@ -31,11 +31,7 @@ func (a *App) pdfFileView(c *ui.Context, vw *viewer) {
 	t := c.Theme()
 	ui.Column(c.Key(vw.id)).Grow(1).MinWidth(0).MinHeight(0).Background(t.Surface).Children(func() {
 		if a.preview != nil {
-			a.preview.View(c.Key("pdf-file"), a.contentWidth(c), func() {
-				if a.viewing == vw {
-					a.openVaultFile(vw.id)
-				}
-			})
+			a.preview.View(c.Key("pdf-file"), a.contentWidth(c))
 		}
 		if !vw.pdfReady {
 			ui.Column(c.Key("pdf-status")).Absolute().Fill().Center().Children(func() {

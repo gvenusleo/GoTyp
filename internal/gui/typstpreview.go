@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 
+	"github.com/gvenusleo/mygo-pdf"
+
 	"gotyp/internal/tinymist"
 	"gotyp/internal/vault"
 )
@@ -97,16 +99,16 @@ func (a *App) receivePDF(client *tinymist.Client, doc tinymist.Document, data []
 	ctx, cancel := context.WithCancel(s.lspContext)
 	s.previewCancel = cancel
 	s.previewVersion = doc.Version
-	a.preview.Load(ctx, data, func(err error) bool {
-		return a.finishPDF(s, client, doc, ctx, err)
+	a.loadPreview(ctx, data, func(state pdf.State) {
+		a.finishPDF(s, client, doc, ctx, state.Err)
 	})
 	return true
 }
 
-func (a *App) finishPDF(s *session, client *tinymist.Client, doc tinymist.Document, ctx context.Context, err error) bool {
+func (a *App) finishPDF(s *session, client *tinymist.Client, doc tinymist.Document, ctx context.Context, err error) {
 	if a.ctx.Err() != nil || ctx.Err() != nil || a.current != s || a.lsp != client ||
 		s.lspID != doc.Session || s.ed.Buffer.Version() != doc.Version {
-		return false
+		return
 	}
 	s.previewCancel()
 	s.previewCancel = nil
@@ -117,10 +119,9 @@ func (a *App) finishPDF(s *session, client *tinymist.Client, doc tinymist.Docume
 	}
 	if err != nil {
 		s.previewErr = "无法显示 Typst 预览：" + err.Error()
-		return false
+		return
 	}
 	s.previewReady, s.previewErr = true, ""
-	return true
 }
 
 func (a *App) stopPreview(s *session) {
@@ -133,7 +134,7 @@ func (a *App) stopPreview(s *session) {
 	}
 	s.previewReady, s.previewStarting, s.previewVersion = false, false, 0
 	if a.preview != nil {
-		a.preview.Clear()
+		a.clearPreview()
 	}
 }
 

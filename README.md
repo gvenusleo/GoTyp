@@ -10,7 +10,7 @@ GoTyp 是用 Go 编写的本地笔记应用，界面由 MyGo Native UI 绘制。
 
 ## 依赖
 
-Typst 预览、PDF 导出和编辑辅助都使用 `PATH` 中的 tinymist。缺少 tinymist 时，仍可编辑和保存 Typst 笔记。预览所需的 PDFium 随安装包分发。[tinymist 项目](https://github.com/Myriad-Dreamin/tinymist)
+Typst 预览、PDF 导出和编辑辅助都使用 `PATH` 中的 tinymist。缺少 tinymist 时，仍可编辑和保存 Typst 笔记。预览由 MyGo PDF 提供，所需的 PDFium 随安装包分发。[tinymist 项目](https://github.com/Myriad-Dreamin/tinymist) · [MyGo PDF](https://github.com/gvenusleo/mygo-pdf)
 
 从访达或程序坞启动的应用拿不到 shell 配置的 `PATH`，所以 GoTyp 启动时会额外查找 `/opt/homebrew/bin`、`/usr/local/bin`、`~/.cargo/bin`、`~/.local/bin` 和 mise 的 shims 目录。
 
@@ -25,10 +25,9 @@ mise run install   # 编译并安装到 /Applications（macOS）
 mise run ci        # 格式检查、vet、测试、编译、漏洞扫描
 ```
 
-`mise run dev` 和 `mise run build` 会为当前平台下载并校验 PDFium。交叉构建时先准备目标架构的资源。`-platform` 支持 macOS、Linux（glibc）和 Windows 的 `amd64` 与 `arm64`。
+`mygo dev` 和 `mygo build` 会按目标平台下载并校验 PDFium 和许可证，随应用打包。支持 macOS、Linux（glibc）和 Windows 的 `amd64` 与 `arm64`。可直接指定交叉构建目标。
 
 ```sh
-mise exec -- go run ./cmd/pdfium-resources -platform=linux/amd64
 mise exec -- go tool mygo build -platform linux/amd64
 ```
 
@@ -45,7 +44,6 @@ mise exec -- go tool mygo build -platform linux/amd64
 | `cmd/gotyp` | 组装依赖并启动应用 |
 | `internal/vault` | 仓库路径、扫描、读取、原子保存和冲突检查，不依赖界面 |
 | `internal/tinymist` | tinymist 进程、编辑辅助、实时预览和已保存笔记的 PDF 导出 |
-| `internal/pdfpreview` | PDFium 加载、后台渲染和 MyGo PDF 查看器 |
 | `internal/gui` | 应用状态、用户动作和界面 |
 
 ## 许可

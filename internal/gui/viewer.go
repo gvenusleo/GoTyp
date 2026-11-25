@@ -9,8 +9,8 @@ import (
 	"strings"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/gvenusleo/mygo-pdf"
 
-	"gotyp/internal/pdfpreview"
 	"gotyp/internal/vault"
 )
 
@@ -55,13 +55,13 @@ func readFile(v *vault.Vault, id string) (source string, st vault.FileStat, vw *
 }
 
 func readPDF(v *vault.Vault, id string) (*viewer, error) {
-	data, _, target, err := v.ReadBytesWithTarget(id, pdfpreview.MaxPDFBytes)
+	data, _, target, err := v.ReadBytesWithTarget(id, pdf.MaxPDFBytes)
 	vw := &viewer{id: id, pdf: data, pdfTarget: target, size: int64(len(data))}
 	switch {
 	case errors.Is(err, fs.ErrNotExist), errors.Is(err, vault.ErrOutside):
 		return vw, err
 	case errors.Is(err, vault.ErrTooLarge):
-		vw.note = fmt.Sprintf("PDF 超过 %d MiB，无法预览", pdfpreview.MaxPDFBytes>>20)
+		vw.note = fmt.Sprintf("PDF 超过 %d MiB，无法预览", pdf.MaxPDFBytes>>20)
 	case err != nil:
 		vw.note = "无法读取 PDF：" + err.Error()
 	}
@@ -76,17 +76,16 @@ func (a *App) loadPDF(vw *viewer) {
 	vw.pdf = nil
 	ctx, cancel := context.WithCancel(a.ctx)
 	vw.pdfCancel = cancel
-	a.preview.Load(ctx, data, func(err error) bool {
+	a.loadPreview(ctx, data, func(state pdf.State) {
 		if ctx.Err() != nil || a.viewing != vw {
-			return false
+			return
 		}
 		vw.cancelPDF()
-		if err != nil {
-			vw.note = "无法显示 PDF：" + err.Error()
-			return false
+		if state.Err != nil {
+			vw.note = "无法显示 PDF：" + state.Err.Error()
+			return
 		}
 		vw.pdfReady = true
-		return true
 	})
 }
 

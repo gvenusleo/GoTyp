@@ -3,11 +3,11 @@ go = "1.27.4"
 
 [tasks.dev]
 description = "启动桌面应用（热重载）"
-run = "go run ./cmd/pdfium-resources && go tool mygo dev -background"
+run = "go tool mygo dev -background"
 
 [tasks.build]
 description = "编译安装包"
-run = "go run ./cmd/pdfium-resources && go tool mygo build"
+run = "go tool mygo build"
 
 [tasks.install]
 description = "安装 macOS App"
@@ -31,8 +31,8 @@ description = "go vet 与 mygo vet 静态检查"
 run = "go vet ./... && go tool mygo vet ."
 
 [tasks.test]
-description = "运行 Go 竞态测试与 PDFium 集成测试"
-run = "go run ./cmd/pdfium-resources && go test ./... -count=1 -race"
+description = "运行 Go 竞态测试"
+run = "go test ./... -count=1 -race"
 
 [tasks.test-nocgo]
 description = "验证无 cgo 构建与测试"

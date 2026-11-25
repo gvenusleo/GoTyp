@@ -39,7 +39,7 @@ func (a *App) typstPreviewView(c *ui.Context, s *session) {
 					width, split              float32
 					focus, diagnostics, alert bool
 				}{a.mode, a.contentWidth(c), a.editorPercent, a.focus, s.previewErrOpen && a.diagReport.text != "", s.conflict || s.err != ""}
-				a.preview.View(c.Key("pdf"), layout, nil)
+				a.preview.View(c.Key("pdf"), layout)
 			}
 			if !s.previewReady {
 				a.typstEmptyView(c, s)

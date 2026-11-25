@@ -65,7 +65,7 @@ func (a *App) useVault(v *vault.Vault, tree *vault.Tree) {
 	a.stopPreview(a.current)
 	a.viewing.cancelPDF()
 	if a.preview != nil && a.viewing != nil && isPDF(a.viewing.id) {
-		a.preview.Clear()
+		a.clearPreview()
 	}
 	a.detachLSP(a.current)
 	a.startLSP(v.Root())

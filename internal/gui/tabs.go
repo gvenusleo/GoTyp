@@ -123,7 +123,7 @@ func (a *App) activateTab(tab *fileTab) {
 		if loadPDF && previous == tab && previousView.id == viewing.id {
 			viewing.pdfReady = previousView.pdfReady
 		} else {
-			a.preview.Clear()
+			a.clearPreview()
 		}
 	}
 	if previous != nil && previous != tab && previous.viewer != nil {
