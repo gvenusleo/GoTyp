@@ -6,7 +6,7 @@ tool github.com/egoist/mygo/cmd/mygo
 
 require (
 	github.com/egoist/mygo v0.10.0
-	github.com/gvenusleo/mygo-pdf v0.1.1
+	github.com/gvenusleo/mygo-pdf v0.2.1
 	golang.org/x/image v0.48.0
 	golang.org/x/sys v0.50.0
 )
