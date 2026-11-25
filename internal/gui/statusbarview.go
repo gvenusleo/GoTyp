@@ -52,6 +52,9 @@ func (a *App) compileStatus(c *ui.Context, s *session) {
 		statusItem(c, "正在启动 Typst 预览", nil, "启动预览", t.TextMuted, nil, true)
 		return
 	}
+	if s.previewReady && s.previewErr != "" && errors == 0 {
+		statusItem(c, s.previewErr, iconAlert, "预览更新失败", t.TextMuted, nil, false)
+	}
 	if errors > 0 {
 		statusItem(c, "查看编译错误", iconCircleX, fmt.Sprintf("%d 个错误", errors), t.Danger, a.statusDiagnostics, false)
 	}

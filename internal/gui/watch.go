@@ -68,12 +68,12 @@ func (a *App) filesChanged(v *vault.Vault, events []mygo.FileEvent) {
 		written = append(written, e.Path)
 	}
 	a.refreshTitles(written)
+	a.readingPDF.record(events)
 	for _, tab := range a.tabs {
-		for _, e := range events {
-			if e.Op == mygo.FileHint || affects(e.Path, tab.id) || affects(e.OldPath, tab.id) {
-				tab.changed = true
-				break
-			}
+		tab.pdfRead.record(events)
+		if fileEventsAffect(events, tab.id, tab.viewer) {
+			tab.changed = true
+			tab.viewer.cancelPDF()
 		}
 	}
 	if s := a.current; s != nil && s.lspPath != "" {
@@ -87,6 +87,60 @@ func (a *App) filesChanged(v *vault.Vault, events []mygo.FileEvent) {
 		}
 	}
 	a.checkTabs()
+}
+
+// PDF 读取结束后才能确定实际目标，需要保留读取期间的变更路径。
+type pdfRead struct {
+	paths map[string]struct{}
+	hint  bool
+}
+
+func newPDFRead(id string) *pdfRead {
+	if isPDF(id) {
+		return &pdfRead{paths: make(map[string]struct{})}
+	}
+	return nil
+}
+
+func (read *pdfRead) record(events []mygo.FileEvent) {
+	if read == nil || read.hint {
+		return
+	}
+	for _, event := range events {
+		if event.Op == mygo.FileHint {
+			read.hint, read.paths = true, nil
+			return
+		}
+		read.paths[event.Path] = struct{}{}
+		if event.OldPath != "" {
+			read.paths[event.OldPath] = struct{}{}
+		}
+	}
+}
+
+func (read *pdfRead) changed(id string, vw *viewer) bool {
+	if read == nil {
+		return false
+	}
+	if read.hint {
+		return true
+	}
+	for changed := range read.paths {
+		if pathAffectsViewer(changed, id, vw) {
+			return true
+		}
+	}
+	return false
+}
+
+func fileEventsAffect(events []mygo.FileEvent, id string, vw *viewer) bool {
+	return slices.ContainsFunc(events, func(e mygo.FileEvent) bool {
+		return e.Op == mygo.FileHint || pathAffectsViewer(e.Path, id, vw) || pathAffectsViewer(e.OldPath, id, vw)
+	})
+}
+
+func pathAffectsViewer(changed, id string, vw *viewer) bool {
+	return affects(changed, id) || vw != nil && vw.pdfTarget != "" && affects(changed, vw.pdfTarget)
 }
 
 // refreshTitles 在后台重新读取被写入笔记的标题。
@@ -171,6 +225,8 @@ func (a *App) checkTab(tab *fileTab) {
 		expected, version = s.stat, s.ed.Buffer.Version()
 	}
 	tab.changed, tab.checking = false, true
+	read := newPDFRead(id)
+	tab.pdfRead = read
 	go func() {
 		var err error
 		if s != nil {
@@ -184,11 +240,11 @@ func (a *App) checkTab(tab *fileTab) {
 			source, stat, next, err = readFile(v, id)
 		}
 		a.publish(func() {
-			if v != a.vault || a.findTab(id) != tab || tab.session != s || tab.viewer != vw {
+			if v != a.vault || a.findTab(id) != tab || tab.session != s || tab.viewer != vw || tab.pdfRead != read {
 				return
 			}
-			tab.checking = false
-			if a.busy || tab.changed || (s != nil && (s.saving || s.stat != expected)) {
+			tab.checking, tab.pdfRead = false, nil
+			if a.busy || tab.changed || read.changed(id, next) || (s != nil && (s.saving || s.stat != expected)) {
 				tab.changed = true
 				return
 			}
@@ -216,6 +272,9 @@ func (a *App) applyFileChange(tab *fileTab, read bool, version uint64, source st
 		tab.changed = true
 	case fileDeleted(err):
 		a.removeTabs(func(other *fileTab) bool { return other == tab })
+	case err != nil && tab.viewer != nil && isPDF(tab.id):
+		tab.viewer.cancelPDF()
+		tab.viewer.note = "无法重新读取 PDF：" + err.Error()
 	case err != nil:
 		a.notify("无法重新读取「" + path.Base(tab.id) + "」：" + err.Error())
 	case s != nil && vw == nil:

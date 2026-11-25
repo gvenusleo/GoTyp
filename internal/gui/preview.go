@@ -107,20 +107,25 @@ func (a *App) openMarkdownLink(s *session, dest string) {
 		return
 	}
 	if _, ok := vault.KindFor(id); !ok {
-		a.openVaultFile(id)
+		if isPDF(id) && a.tree != nil && a.tree.Files[id] {
+			a.openNote(id)
+		} else {
+			// 隐藏目录中的附件不在文件树里，仍可在默认应用中打开。
+			a.openVaultFile(id)
+		}
 		return
 	}
 	if a.tree == nil {
 		return
 	}
-	if _, ok := a.tree.Titles[id]; !ok {
-		a.notify("链接的笔记不存在")
+	if !a.tree.Files[id] {
+		a.notify("链接的文件不存在")
 		return
 	}
 	a.openNote(id)
 }
 
-// openVaultFile 用系统默认应用打开仓库内的文件，例如链接的 PDF 或应用内无法显示的文件。路径解析在后台进行。
+// openVaultFile 用系统默认应用打开仓库内的文件。路径解析在后台进行。
 func (a *App) openVaultFile(id string) {
 	v := a.vault
 	if v == nil {

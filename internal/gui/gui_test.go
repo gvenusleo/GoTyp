@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -78,6 +79,31 @@ func TestPreviewDropsStaleSnapshots(t *testing.T) {
 	s.lspID++
 	if a.receivePDF(a.lsp, doc, nil, tinymist.ErrCompile) || !s.previewStarting || s.previewErr != "" {
 		t.Fatal("切回同一个标签后接受了早先激活的预览")
+	}
+	pending, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	s.previewCancel, s.previewReady = cancel, true
+	a.receivePDF(a.lsp, s.lspDocument(), nil, tinymist.ErrCompile)
+	if pending.Err() == nil || !s.previewReady || s.previewErr == "" {
+		t.Fatal("当前编译失败后应取消待显示的 PDF 并保留已有画面")
+	}
+}
+
+func TestPDFFileChangeCancelsPendingPreview(t *testing.T) {
+	a, _ := newTestApp(t, "source")
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	vw := &viewer{id: "document.pdf", pdfCancel: cancel, pdfReady: true}
+	a.showViewer(vw)
+	// 等当前文件操作结束后再重读，先使已排队的 PDF 失效。
+	a.busy = true
+	a.readingPDF = newPDFRead("other.pdf")
+	a.filesChanged(a.vault, []mygo.FileEvent{
+		{Op: mygo.FileWrite, Path: vw.id},
+		{Op: mygo.FileWrite, Path: "other.pdf"},
+	})
+	if ctx.Err() == nil || !a.activeTab.changed || !a.readingPDF.changed("other.pdf", nil) || !vw.pdfReady {
+		t.Fatal("文件变化应使在途读取和渲染失效，并保留已有画面")
 	}
 }
 

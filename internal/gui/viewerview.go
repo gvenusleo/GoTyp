@@ -7,10 +7,13 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// viewerView 显示不进编辑器的文件：图片铺在浅灰画布上，其余是类型图标、原因和
-// 「在默认应用中打开」。
+// viewerView 显示只读文件，并为无法预览的文件提供系统打开入口。
 func (a *App) viewerView(c *ui.Context, vw *viewer) {
 	t := c.Theme()
+	if isPDF(vw.id) {
+		a.pdfFileView(c, vw)
+		return
+	}
 	if vw.img != nil {
 		ui.Scroll(c.Key("viewer-" + vw.id)).Grow(1).MinHeight(0).Background(t.Surface).Label(path.Base(vw.id)).Children(func() {
 			ui.Column(c).FillWidth().MinHeight(0).AlignItems(ui.Center).Padding(previewInset).Children(func() {
@@ -21,6 +24,29 @@ func (a *App) viewerView(c *ui.Context, vw *viewer) {
 		})
 		return
 	}
+	a.viewerFallback(c, vw)
+}
+
+func (a *App) pdfFileView(c *ui.Context, vw *viewer) {
+	t := c.Theme()
+	ui.Column(c.Key(vw.id)).Grow(1).MinWidth(0).MinHeight(0).Background(t.Surface).Children(func() {
+		if a.preview != nil {
+			a.preview.View(c.Key("pdf-file"), a.contentWidth(c))
+		}
+		if !vw.pdfReady {
+			ui.Column(c.Key("pdf-status")).Absolute().Fill().Center().Children(func() {
+				if vw.note != "" || a.preview == nil {
+					a.viewerFallback(c, vw)
+				} else {
+					ui.Spinner(c).Label("正在打开 PDF")
+				}
+			})
+		}
+	})
+}
+
+func (a *App) viewerFallback(c *ui.Context, vw *viewer) {
+	t := c.Theme()
 	ui.Column(c).Grow(1).Center().Gap(t.Space(2)).Padding(emptyInset).Children(func() {
 		ui.Icon(c, fileIcon(vw.id)).FontSize(emptyIconSize).TextColor(t.TextMuted.Alpha(0.6)).Margin(0, 0, t.Space(1))
 		ui.Text(c, path.Base(vw.id)).SingleLine().Ellipsis("…").MaxWidth(textWidth)
@@ -31,9 +57,12 @@ func (a *App) viewerView(c *ui.Context, vw *viewer) {
 	})
 }
 
-// viewerStatus 是查看图片时状态栏右侧的尺寸和文件大小。
+// viewerStatus 显示只读文件的大小和加载状态。
 func (a *App) viewerStatus(c *ui.Context, vw *viewer) {
 	t := c.Theme()
+	if vw.pdfReady && vw.note != "" {
+		statusItem(c, vw.note, iconAlert, "PDF 更新失败", t.TextMuted, nil, false)
+	}
 	if vw.width > 0 {
 		statusItem(c, "像素尺寸", nil, fmt.Sprintf("%d × %d", vw.width, vw.height), t.TextMuted, nil, false)
 	}

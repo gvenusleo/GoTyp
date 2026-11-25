@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 
+	"github.com/gvenusleo/mygo-pdf"
+
 	"gotyp/internal/tinymist"
 	"gotyp/internal/vault"
 )
@@ -79,6 +81,10 @@ func (a *App) receivePDF(client *tinymist.Client, doc tinymist.Document, data []
 			return false
 		}
 		s.previewVersion = doc.Version
+		if s.previewCancel != nil {
+			s.previewCancel()
+			s.previewCancel = nil
+		}
 		s.previewMissing = errors.Is(err, tinymist.ErrUnavailable)
 		s.previewErr = "无法更新 Typst 预览：" + err.Error()
 		a.refreshMenu()
@@ -93,11 +99,9 @@ func (a *App) receivePDF(client *tinymist.Client, doc tinymist.Document, data []
 	ctx, cancel := context.WithCancel(s.lspContext)
 	s.previewCancel = cancel
 	s.previewVersion = doc.Version
-	viewer := a.preview
-	go func() {
-		err := viewer.Load(ctx, data)
-		a.publish(func() { a.finishPDF(s, client, doc, ctx, err) })
-	}()
+	a.loadPreview(ctx, data, func(state pdf.State) {
+		a.finishPDF(s, client, doc, ctx, state.Err)
+	})
 	return true
 }
 
@@ -106,12 +110,18 @@ func (a *App) finishPDF(s *session, client *tinymist.Client, doc tinymist.Docume
 		s.lspID != doc.Session || s.ed.Buffer.Version() != doc.Version {
 		return
 	}
+	s.previewCancel()
+	s.previewCancel = nil
 	s.previewStarting = false
+	if s.previewMissing {
+		s.previewMissing = false
+		a.refreshMenu()
+	}
 	if err != nil {
 		s.previewErr = "无法显示 Typst 预览：" + err.Error()
 		return
 	}
-	s.previewReady, s.previewMissing, s.previewErr = true, false, ""
+	s.previewReady, s.previewErr = true, ""
 }
 
 func (a *App) stopPreview(s *session) {
@@ -124,7 +134,7 @@ func (a *App) stopPreview(s *session) {
 	}
 	s.previewReady, s.previewStarting, s.previewVersion = false, false, 0
 	if a.preview != nil {
-		a.preview.Clear()
+		a.clearPreview()
 	}
 }
 

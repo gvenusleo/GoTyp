@@ -141,11 +141,6 @@ func (a *App) applyTheme(c *ui.Context) {
 			base: base, appearance: ap, app: app, sidebar: sidebarTheme(*app),
 			code: code, md: md, preview: previewTheme(app, md),
 		}
-		// PDF 画布跟随主题，页面保留文档原色。
-		if a.preview != nil {
-			s := app.Surface
-			a.preview.SetBackground(float64(s.R)/255, float64(s.G)/255, float64(s.B)/255)
-		}
 	}
 	c.SetTheme(a.themes.app)
 }

@@ -9,8 +9,8 @@ import (
 	"github.com/egoist/mygo"
 	_ "github.com/egoist/mygo/locales/zh-Hans"
 	"github.com/egoist/mygo/ui"
+	"github.com/gvenusleo/mygo-pdf"
 
-	"gotyp/internal/pdfpreview"
 	"gotyp/internal/tinymist"
 	"gotyp/internal/vault"
 )
@@ -49,9 +49,10 @@ type App struct {
 	diags      map[string][]tinymist.Diagnostic
 	diagReport diagReport
 	// preview 随窗口创建，切换笔记只替换 PDF 文档。
-	preview      pdfpreview.Viewer
-	previewError string
-	lspSeq       uint64
+	preview        *pdf.Viewer
+	previewLoaded  func(pdf.State)
+	previewRequest uint64
+	lspSeq         uint64
 	// pendingJump 是打开另一篇笔记后要移动到的位置，见 typstedit.go。
 	pendingJump  *noteJump
 	symbolRename symbolRenameState
@@ -77,7 +78,8 @@ type App struct {
 	tabScroll     ui.ScrollState
 	current       *session
 	// viewing 是当前打开的图片或无法以文本打开的文件，与 current 至多一个不为空。
-	viewing *viewer
+	viewing    *viewer
+	readingPDF *pdfRead
 
 	// focus 只在会话内生效，不写入工作区状态。
 	focus bool
@@ -132,22 +134,31 @@ func Run() error {
 		a.win.OnClose(a.beforeClose)
 		a.win.OnClosed(func() {
 			a.stopPreview(a.current)
+			a.viewing.cancelPDF()
 			a.cancel()
 			a.stopLSP()
-			if a.preview != nil {
-				a.preview.Close()
-			}
 		})
-		var err error
-		a.preview, err = pdfpreview.NewViewer()
-		if err != nil {
-			a.previewError = "无法创建 PDF 预览：" + err.Error()
-		}
+		a.preview = pdf.NewViewer(a.win, pdf.Options{
+			Labels:          pdf.ChineseLabels(),
+			OnLink:          func(address string) { a.services.OpenURL(address) },
+			CanOpenExternal: func() bool { return a.viewing != nil && isPDF(a.viewing.id) },
+			OpenExternal: func() {
+				if a.viewing != nil && isPDF(a.viewing.id) {
+					a.openVaultFile(a.viewing.id)
+				}
+			},
+		})
+		a.preview.OnChange(a.pdfStateChanged)
 		if len(a.state.Recent) > 0 {
 			a.startOpenVault(a.state.Recent[0])
 		}
 	})
-	return mygo.App.Run()
+	err := mygo.App.Run()
+	if a.preview != nil {
+		a.preview.Close()
+		<-a.preview.Done()
+	}
+	return err
 }
 
 func (a *App) setMenu() {

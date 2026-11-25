@@ -14,6 +14,7 @@ type fileTab struct {
 	viewer   *viewer
 	changed  bool
 	checking bool
+	pdfRead  *pdfRead
 }
 
 func (tab *fileTab) loaded() bool {
@@ -91,13 +92,13 @@ func (a *App) openNote(id string) {
 
 func (a *App) showSession(s *session) {
 	tab := a.tabFor(s.id)
-	tab.session, tab.viewer, tab.checking = s, nil, false
+	tab.session, tab.viewer, tab.checking, tab.pdfRead = s, nil, false, nil
 	a.activateTab(tab)
 }
 
 func (a *App) showViewer(vw *viewer) {
 	tab := a.tabFor(vw.id)
-	tab.session, tab.viewer, tab.checking = nil, vw, false
+	tab.session, tab.viewer, tab.checking, tab.pdfRead = nil, vw, false, nil
 	a.pendingJump = nil
 	a.activateTab(tab)
 }
@@ -113,11 +114,26 @@ func (a *App) activateTab(tab *fileTab) {
 		a.detachLSP(a.current)
 	}
 	previous := a.activeTab
+	previousView := a.viewing
+	if viewing != previousView {
+		previousView.cancelPDF()
+	}
+	loadPDF := viewing != nil && isPDF(viewing.id) && viewing != previousView
+	if a.preview != nil && previousView != nil && isPDF(previousView.id) && viewing != previousView {
+		if loadPDF && previous == tab && previousView.id == viewing.id {
+			viewing.pdfReady = previousView.pdfReady
+		} else {
+			a.clearPreview()
+		}
+	}
 	if previous != nil && previous != tab && previous.viewer != nil {
 		// 只读文件下次激活时重读，及时释放可能很大的图片。
-		previous.viewer, previous.checking = nil, false
+		previous.viewer, previous.checking, previous.pdfRead = nil, false, nil
 	}
 	a.activeTab, a.current, a.viewing = tab, next, viewing
+	if loadPDF {
+		a.loadPDF(viewing)
+	}
 	a.tabIndex = max(0, slices.Index(a.tabs, tab))
 	a.revealTab = tab != nil && previous != tab
 	if next != nil {
