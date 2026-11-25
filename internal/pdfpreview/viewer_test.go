@@ -209,6 +209,72 @@ func checkSharpTiles(t *testing.T, v *Viewer, view *ui.Tester, updates <-chan fu
 	}
 }
 
+func TestRefreshRendersVisiblePages(t *testing.T) {
+	updates := make(chan func(), 1)
+	v := newViewer(func(fn func()) { updates <- fn }, testEngine(t))
+	t.Cleanup(func() { v.Close(); <-v.Done() })
+	view := ui.NewTester(func(c *ui.Context) { v.View(c, nil, nil) }, 420, 700)
+	view.Frame()
+	data := samplePDF(6)
+	load := func(data []byte) {
+		previous := v.document
+		v.Load(t.Context(), data, func(err error) bool {
+			if err != nil {
+				t.Error(err)
+			}
+			return err == nil
+		})
+		await(t, updates, view, func() bool { return v.document != previous })
+	}
+	load(data)
+	await(t, updates, view, func() bool { return v.cache[1].frame != nil })
+	second, ok := view.Find("第 2 页")
+	if !ok || second.Y+40 >= v.height {
+		t.Fatal("测试视口未显示第二页")
+	}
+	green := color.RGBA{0, 255, 0, 255}
+	load(bytes.ReplaceAll(data, []byte("1 0 0 rg"), []byte("0 1 0 rg")))
+	if got := view.Image().RGBAAt(int(second.X+20), int(second.Y+40)); got != green {
+		t.Errorf("刷新提交后的第二页像素为 %v，预期为 %v", got, green)
+	}
+
+	// 位图已排队时仍可滚动，提交必须覆盖新的视口。
+	await(t, updates, view, func() bool { return len(v.wanted) == 0 })
+	previous := v.document
+	v.Load(t.Context(), data, func(err error) bool { return err == nil })
+	select {
+	case apply := <-updates:
+		v.scroll.Y = v.layout.pages[3].Y
+		view.Frame()
+		apply()
+		view.Frame()
+	case <-time.After(5 * time.Second):
+		t.Fatal("没有收到刷新结果")
+	}
+	await(t, updates, view, func() bool { return v.document != previous })
+	first, last := v.visiblePages()
+	assertVisibleFrames(t, v, first, last)
+
+	v.scroll.Y = v.layout.pages[4].Y
+	view.Frame()
+	if v.anchor().page < 2 {
+		t.Fatal("测试视口未滚到即将移除的页面")
+	}
+	load(samplePDF(2))
+	first, last = v.visiblePages()
+	assertVisibleFrames(t, v, first, last)
+}
+
+func assertVisibleFrames(t *testing.T, v *Viewer, first, last int) {
+	t.Helper()
+	for page := first; page <= last; page++ {
+		frame := v.cache[page].frame
+		if frame == nil || frame.key.document != v.document {
+			t.Errorf("第 %d 页缺少新文档的位图", page+1)
+		}
+	}
+}
+
 func TestVisiblePageRequestsSettle(t *testing.T) {
 	v := &Viewer{
 		worker: &worker{wake: make(chan struct{}, 1)}, document: 1,

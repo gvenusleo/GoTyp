@@ -50,6 +50,24 @@ func (v *Vault) ReadBytes(id string, limit int64) ([]byte, FileStat, error) {
 	if err != nil {
 		return nil, FileStat{}, err
 	}
+	return readBytes(name, id, limit)
+}
+
+// ReadBytesWithTarget 同时返回实际读取的仓库内相对路径，供调用方匹配文件变更。
+func (v *Vault) ReadBytesWithTarget(id string, limit int64) ([]byte, FileStat, string, error) {
+	name, err := v.Resolve(id)
+	if err != nil {
+		return nil, FileStat{}, "", err
+	}
+	target, err := filepath.Rel(v.root, name)
+	if err != nil {
+		return nil, FileStat{}, "", err
+	}
+	data, stat, err := readBytes(name, id, limit)
+	return data, stat, filepath.ToSlash(target), err
+}
+
+func readBytes(name, id string, limit int64) ([]byte, FileStat, error) {
 	f, err := os.Open(name)
 	if err != nil {
 		return nil, FileStat{}, err

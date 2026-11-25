@@ -132,10 +132,8 @@ func (a *App) loadSession(id string) {
 	generation := a.generation
 	a.busy = true
 	a.err = ""
-	a.readingPDF, a.pdfReadChanged = "", false
-	if isPDF(id) {
-		a.readingPDF = id
-	}
+	read := newPDFRead(id)
+	a.readingPDF = read
 	go func() {
 		source, st, vw, err := readFile(v, id)
 		a.publish(func() {
@@ -143,9 +141,8 @@ func (a *App) loadSession(id string) {
 				return
 			}
 			a.busy = false
-			changed := a.pdfReadChanged
-			a.readingPDF, a.pdfReadChanged = "", false
-			if changed {
+			a.readingPDF = nil
+			if read.changed(id, vw) {
 				a.loadSession(id)
 				return
 			}

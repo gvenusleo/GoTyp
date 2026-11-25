@@ -22,6 +22,7 @@ type viewer struct {
 	size          int64 // 文件字节数，未知时为 0
 	note          string
 	pdf           []byte
+	pdfTarget     string
 	pdfReady      bool
 	pdfCancel     context.CancelFunc
 }
@@ -54,11 +55,11 @@ func readFile(v *vault.Vault, id string) (source string, st vault.FileStat, vw *
 }
 
 func readPDF(v *vault.Vault, id string) (*viewer, error) {
-	data, _, err := v.ReadBytes(id, pdfpreview.MaxPDFBytes)
-	vw := &viewer{id: id, pdf: data, size: int64(len(data))}
+	data, _, target, err := v.ReadBytesWithTarget(id, pdfpreview.MaxPDFBytes)
+	vw := &viewer{id: id, pdf: data, pdfTarget: target, size: int64(len(data))}
 	switch {
 	case errors.Is(err, fs.ErrNotExist), errors.Is(err, vault.ErrOutside):
-		return nil, err
+		return vw, err
 	case errors.Is(err, vault.ErrTooLarge):
 		vw.note = fmt.Sprintf("PDF 超过 %d MiB，无法预览", pdfpreview.MaxPDFBytes>>20)
 	case err != nil:

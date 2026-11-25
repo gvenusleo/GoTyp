@@ -48,6 +48,12 @@ func (l pageLayout) preview(doc uint64, page int, zoom float32) rasterKey {
 	return l.rasterAt(doc, page, min(1, 1/float64(zoom)), 1_000_000)
 }
 
+func (l pageLayout) fallback(doc uint64, page int, zoom float32, budget int) rasterKey {
+	key := l.rasterAt(doc, page, min(1, 1/float64(zoom)), min(1_000_000, budget/8))
+	key.metadata = min(pageMetadata, budget/2)
+	return key
+}
+
 func (l pageLayout) rasterAt(doc uint64, page int, scale float64, pixelLimit int) rasterKey {
 	r := l.pages[page]
 	return rasterKey{document: doc, page: page, size: rasterSize(float64(r.W)*scale, float64(r.H)*scale, pixelLimit), metadata: pageMetadata}
@@ -112,17 +118,22 @@ func (v *Viewer) setZoom(zoom, x, y float32) {
 }
 
 func (v *Viewer) visiblePages() (first, last int) {
-	first = v.layout.firstPage(v.scroll.Y)
-	last = v.layout.firstPage(v.scroll.Y + max(0, v.height-1))
-	if last > first && v.layout.pages[last].Y >= v.scroll.Y+v.height {
+	return v.layout.visiblePages(v.scroll.Y, v.height)
+}
+
+func (l pageLayout) visiblePages(y, height float32) (first, last int) {
+	first = l.firstPage(y)
+	last = l.firstPage(y + height)
+	if last > first && l.pages[last].Y >= y+height {
 		last--
 	}
 	return first, last
 }
 
+// 给预取页留出空间，确保可见页的回退图可以同时留在缓存中。
+const visibleBudget = bitmapBudget * 3 / 4
+
 func (v *Viewer) requestVisible(first, last int) {
-	// 给预取页留出空间，确保可见页的回退图可以同时留在缓存中。
-	const visibleBudget = bitmapBudget * 3 / 4
 	pageBudget := visibleBudget / (last - first + 1)
 	var fullBytes int
 	for i := first; i <= last; i++ {
@@ -139,8 +150,7 @@ func (v *Viewer) requestVisible(first, last int) {
 				v.recency.MoveToFront(entry.recency)
 				continue
 			}
-			key = v.layout.rasterAt(v.document, i, min(1, 1/float64(v.zoom)), min(1_000_000, pageBudget/8))
-			key.metadata = min(pageMetadata, pageBudget/2)
+			key = v.layout.fallback(v.document, i, v.zoom, pageBudget)
 		}
 		requests = v.requestPage(requests, key)
 	}

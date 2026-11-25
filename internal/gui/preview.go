@@ -106,8 +106,13 @@ func (a *App) openMarkdownLink(s *session, dest string) {
 		a.notify("链接超出笔记仓库")
 		return
 	}
-	if _, ok := vault.KindFor(id); !ok && !isPDF(id) {
-		a.openVaultFile(id)
+	if _, ok := vault.KindFor(id); !ok {
+		if isPDF(id) && a.tree != nil && a.tree.Files[id] {
+			a.openNote(id)
+		} else {
+			// 隐藏目录中的附件不在文件树里，仍可在默认应用中打开。
+			a.openVaultFile(id)
+		}
 		return
 	}
 	if a.tree == nil {

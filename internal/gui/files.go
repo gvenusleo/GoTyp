@@ -203,7 +203,7 @@ func (a *App) itemRelocated(from, to string) {
 		}
 		tab.id = to + strings.TrimPrefix(tab.id, from)
 		// 在途的监听结果仍指向旧路径，用新路径重新核对已加载的文件。
-		tab.changed, tab.checking = tab.loaded(), false
+		tab.changed, tab.checking, tab.pdfRead = tab.loaded(), false, nil
 		if tab == a.activeTab {
 			a.stopPreview(a.current)
 			a.detachLSP(a.current)

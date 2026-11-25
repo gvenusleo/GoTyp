@@ -97,12 +97,12 @@ func TestPDFFileChangeCancelsPendingPreview(t *testing.T) {
 	a.showViewer(vw)
 	// 等当前文件操作结束后再重读，先使已排队的 PDF 失效。
 	a.busy = true
-	a.readingPDF = "other.pdf"
+	a.readingPDF = newPDFRead("other.pdf")
 	a.filesChanged(a.vault, []mygo.FileEvent{
 		{Op: mygo.FileWrite, Path: vw.id},
-		{Op: mygo.FileWrite, Path: a.readingPDF},
+		{Op: mygo.FileWrite, Path: "other.pdf"},
 	})
-	if ctx.Err() == nil || !a.activeTab.changed || !a.pdfReadChanged || !vw.pdfReady {
+	if ctx.Err() == nil || !a.activeTab.changed || !a.readingPDF.changed("other.pdf", nil) || !vw.pdfReady {
 		t.Fatal("文件变化应使在途读取和渲染失效，并保留已有画面")
 	}
 }

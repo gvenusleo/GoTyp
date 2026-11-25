@@ -95,41 +95,40 @@ func (v *Viewer) Load(ctx context.Context, data []byte, accept func(error) bool)
 	}
 	ctx, v.cancelLoad = context.WithCancel(ctx)
 	v.loadID++
-	v.worker.submitLoad(&loadJob{
-		ctx: ctx, id: v.loadID, data: data, accept: accept,
-		anchor: v.anchor().page, width: v.width, zoom: v.zoom, gap: v.gap,
-	})
+	v.worker.submitLoad(&loadJob{ctx: ctx, id: v.loadID, data: data, accept: accept, viewport: v.loadViewport()})
 }
 
-func (v *Viewer) finishLoad(job *loadJob, doc *document, frame *pageFrame, err error) bool {
-	if job.id != v.loadID || job.ctx.Err() != nil {
-		return false
-	}
+func (v *Viewer) loadViewport() loadViewport {
+	return loadViewport{anchor: v.anchor(), width: v.width, height: v.height, zoom: v.zoom, gap: v.gap}
+}
+
+func (v *Viewer) finishLoad(job *loadJob, doc *document, plan loadPlan, frames []*pageFrame, err error) bool {
 	accepted := job.accept(err)
 	v.cancelLoad()
 	v.cancelLoad = nil
 	if err != nil || !accepted {
 		return false
 	}
-	anchor := v.anchor()
 	if v.cancelDoc != nil {
 		v.cancelDoc()
 	}
 	v.docContext, v.cancelDoc = context.WithCancel(context.Background())
 	v.document, v.pages = doc.id, doc.pages
 	v.hasSelection, v.pointer = false, pointerDrag{}
-	v.layout = newLayout(v.pages, v.width, v.zoom, v.gap)
-	v.scroll.Y = max(0, min(v.layout.offset(anchor), v.layout.height-v.height))
+	v.layout, v.scroll.Y = plan.layout, plan.y
 	v.scroll.X = min(v.scroll.X, max(0, v.layout.width-v.width))
 	v.setWanted(nil)
 	v.clearTiles()
 	// 只发布新文档的图像，避免旧画面和新文字、链接混用。
+	first, last := frames[0].key.page, frames[len(frames)-1].key.page
 	for page := range v.cache {
-		if page != frame.key.page {
+		if page < first || page > last {
 			v.removePage(page)
 		}
 	}
-	v.cachePage(frame)
+	for _, frame := range frames {
+		v.cachePage(frame)
+	}
 	return true
 }
 
@@ -199,6 +198,9 @@ func (v *Viewer) finishPage(key rasterKey, frame *pageFrame, err error) bool {
 	}
 	if err == nil {
 		v.cachePage(frame)
+		for v.cacheSize > bitmapBudget {
+			v.removePage(v.recency.Back().Value.(int))
+		}
 	} else {
 		entry := v.cache[key.page]
 		entry.failed, entry.err = key, err
@@ -213,9 +215,6 @@ func (v *Viewer) cachePage(frame *pageFrame) {
 	v.removePage(page)
 	v.cache[page] = cachedPage{frame: frame, recency: v.recency.PushFront(page)}
 	v.cacheSize += frame.frameBytes()
-	for v.cacheSize > bitmapBudget {
-		v.removePage(v.recency.Back().Value.(int))
-	}
 }
 
 func (v *Viewer) removePage(page int) {

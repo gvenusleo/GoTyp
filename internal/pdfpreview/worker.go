@@ -35,12 +35,35 @@ func (key rasterKey) region() image.Rectangle {
 }
 
 type loadJob struct {
-	ctx              context.Context
-	id               uint64
-	data             []byte
-	anchor           int
-	width, zoom, gap float32
-	accept           func(error) bool
+	ctx      context.Context
+	id       uint64
+	data     []byte
+	accept   func(error) bool
+	viewport loadViewport
+}
+
+type loadViewport struct {
+	anchor                   readingPosition
+	width, height, zoom, gap float32
+}
+
+type loadPlan struct {
+	viewport loadViewport
+	layout   pageLayout
+	y        float32
+	keys     []rasterKey
+}
+
+func (vp loadViewport) plan(doc *document) loadPlan {
+	layout := newLayout(doc.pages, vp.width, vp.zoom, vp.gap)
+	y := max(0, min(layout.offset(vp.anchor), layout.height-vp.height))
+	first, last := layout.visiblePages(y, vp.height)
+	keys := make([]rasterKey, last-first+1)
+	budget := visibleBudget / len(keys)
+	for i := range keys {
+		keys[i] = layout.fallback(doc.id, first+i, vp.zoom, budget)
+	}
+	return loadPlan{viewport: vp, layout: layout, y: y, keys: keys}
 }
 
 type copyJob struct {
@@ -172,45 +195,50 @@ func (v *Viewer) replaceDocument(e *engine, old *document, job *loadJob) (*engin
 	if job.ctx.Err() != nil {
 		return e, old
 	}
-	doc, frame, loadedEngine, err := v.worker.prepare(e, job)
+	doc, e, err := v.worker.openDocument(e, job)
+	var plan loadPlan
+	var frames []*pageFrame
+	if err == nil {
+		plan = job.viewport.plan(doc)
+		frames, err = e.renderLoad(job.ctx, doc, plan.keys, nil)
+	}
 	for {
-		reply := v.publishLoad(job, doc, frame, err)
-		if reply.next.document != 0 {
-			pdfiumMu.Lock()
-			frame, err = loadedEngine.render(job.ctx, doc, reply.next)
-			pdfiumMu.Unlock()
+		reply := v.publishLoad(job, doc, plan, frames, err)
+		if reply.next != nil {
+			plan = *reply.next
+			frames, err = e.renderLoad(job.ctx, doc, plan.keys, frames)
 			continue
 		}
 		if reply.installed {
-			closeDocument(loadedEngine, old)
-			return loadedEngine, doc
+			closeDocument(e, old)
+			return e, doc
 		}
-		closeDocument(loadedEngine, doc)
-		return loadedEngine, old
+		closeDocument(e, doc)
+		return e, old
 	}
 }
 
 type loadReply struct {
 	installed bool
-	next      rasterKey
+	next      *loadPlan
 }
 
-func (v *Viewer) publishLoad(job *loadJob, doc *document, frame *pageFrame, err error) loadReply {
+func (v *Viewer) publishLoad(job *loadJob, doc *document, plan loadPlan, frames []*pageFrame, err error) loadReply {
 	var reply loadReply
 	if !v.deliver(func() bool {
 		if job.id != v.loadID || job.ctx.Err() != nil {
 			return false
 		}
-		// 滚动过程中可能已经离开最初请求的页，提交前补渲染当前页。
-		if err == nil {
-			page := min(v.anchor().page, len(doc.pages)-1)
-			if page != frame.key.page {
-				layout := newLayout(doc.pages, v.width, v.zoom, v.gap)
-				reply.next = layout.preview(doc.id, page, v.zoom)
+		// 提交前按最新视口核对可见页。页数减少时先限制滚动位置，再决定渲染哪些页。
+		if viewport := v.loadViewport(); err == nil && viewport != plan.viewport {
+			next := viewport.plan(doc)
+			if !slices.Equal(next.keys, plan.keys) {
+				reply.next = &next
 				return true
 			}
+			plan = next
 		}
-		reply.installed = v.finishLoad(job, doc, frame, err)
+		reply.installed = v.finishLoad(job, doc, plan, frames, err)
 		return true
 	}) {
 		return loadReply{}
@@ -218,27 +246,48 @@ func (v *Viewer) publishLoad(job *loadJob, doc *document, frame *pageFrame, err 
 	return reply
 }
 
-func (w *worker) prepare(e *engine, job *loadJob) (*document, *pageFrame, *engine, error) {
+func (w *worker) openDocument(e *engine, job *loadJob) (*document, *engine, error) {
 	pdfiumMu.Lock()
 	defer pdfiumMu.Unlock()
 	if e == nil {
 		var err error
 		e, err = w.getEngine()
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, err
 		}
 	}
 	// 获取 PDFium 的最后错误时必须与 LoadMemDocument 在同一线程。
 	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	doc, err := e.open(job.ctx, job.id, job.data)
-	runtime.UnlockOSThread()
-	if err != nil {
-		return nil, nil, e, err
+	return doc, e, err
+}
+
+func (e *engine) renderLoad(ctx context.Context, doc *document, keys []rasterKey, previous []*pageFrame) ([]*pageFrame, error) {
+	frames := make([]*pageFrame, len(keys))
+	if len(previous) > 0 {
+		first := previous[0].key.page
+		for i, key := range keys {
+			index := key.page - first
+			if index >= 0 && index < len(previous) && previous[index].key == key {
+				frames[i] = previous[index]
+			}
+		}
+		clear(previous)
 	}
-	page := min(job.anchor, len(doc.pages)-1)
-	layout := newLayout(doc.pages, job.width, job.zoom, job.gap)
-	frame, err := e.render(job.ctx, doc, layout.preview(doc.id, page, job.zoom))
-	return doc, frame, e, err
+	for i, key := range keys {
+		if frames[i] != nil {
+			continue
+		}
+		pdfiumMu.Lock()
+		frame, err := e.render(ctx, doc, key)
+		pdfiumMu.Unlock()
+		if err != nil {
+			return nil, err
+		}
+		frames[i] = frame
+	}
+	return frames, nil
 }
 
 func (v *Viewer) renderPage(e *engine, doc *document, key rasterKey, ctx context.Context) {

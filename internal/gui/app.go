@@ -76,9 +76,8 @@ type App struct {
 	tabScroll     ui.ScrollState
 	current       *session
 	// viewing 是当前打开的图片或无法以文本打开的文件，与 current 至多一个不为空。
-	viewing        *viewer
-	readingPDF     string
-	pdfReadChanged bool
+	viewing    *viewer
+	readingPDF *pdfRead
 
 	// focus 只在会话内生效，不写入工作区状态。
 	focus bool
