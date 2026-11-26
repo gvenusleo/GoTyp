@@ -3,7 +3,7 @@ package gui
 import (
 	"testing"
 
-	"github.com/gvenusleo/mygo-pdf"
+	"github.com/gvenusleo/mygo-pdf/pdf"
 )
 
 func TestPDFStateChangedCompletesOnlyCurrentRequest(t *testing.T) {

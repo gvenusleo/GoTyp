@@ -3,7 +3,7 @@ package gui
 import (
 	"context"
 
-	"github.com/gvenusleo/mygo-pdf"
+	"github.com/gvenusleo/mygo-pdf/pdf"
 )
 
 func (a *App) loadPreview(ctx context.Context, data []byte, finished func(pdf.State)) {

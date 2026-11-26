@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/egoist/mygo/ui"
-	"github.com/gvenusleo/mygo-pdf"
+	"github.com/gvenusleo/mygo-pdf/pdf"
 
 	"gotyp/internal/vault"
 )

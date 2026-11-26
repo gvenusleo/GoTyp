@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/gvenusleo/mygo-pdf"
+	"github.com/gvenusleo/mygo-pdf/pdf"
 
 	"gotyp/internal/tinymist"
 	"gotyp/internal/vault"

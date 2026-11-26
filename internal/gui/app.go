@@ -9,7 +9,7 @@ import (
 	"github.com/egoist/mygo"
 	_ "github.com/egoist/mygo/locales/zh-Hans"
 	"github.com/egoist/mygo/ui"
-	"github.com/gvenusleo/mygo-pdf"
+	"github.com/gvenusleo/mygo-pdf/pdf"
 
 	"gotyp/internal/tinymist"
 	"gotyp/internal/vault"
