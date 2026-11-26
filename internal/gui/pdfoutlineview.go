@@ -1,0 +1,169 @@
+package gui
+
+import (
+	"cmp"
+	"fmt"
+
+	"github.com/egoist/mygo/ui"
+
+	"gotyp/internal/vault"
+)
+
+func (a *App) outlineSidebarView(c *ui.Context) {
+	t := c.Theme()
+	ui.Column(c.Key("outline-sidebar")).Fill().MinWidth(0).MinHeight(0).Background(t.Background).Children(func() {
+		ui.Row(c).Height(headerHeight).Shrink(0).DragWindow()
+		ui.Divider(c)
+		ui.Themed(c, a.themes.outline).Grow(1).MinHeight(0).FillWidth().
+			Padding(t.Space(3)).Children(func() {
+			a.pdfOutlineView(c, t.Accent)
+		})
+	})
+}
+
+func (a *App) pdfOutlineView(c *ui.Context, focusColor ui.Color) {
+	p := &a.pdfOutline
+	if s := a.current; s != nil && s.kind == vault.KindTypst && a.mode == modeEdit {
+		outlineStatus(c, "切换到分屏或预览以查看大纲")
+		return
+	}
+	if p.displayed == 0 {
+		if a.viewing != nil && isPDF(a.viewing.id) && a.viewing.note == "" ||
+			a.current != nil && a.current.kind == vault.KindTypst && a.current.previewStarting {
+			ui.Spinner(c).Label("正在读取大纲").Margin(pdfOutlineLabelInset(c.Theme()))
+		} else {
+			outlineStatus(c, "没有可用的大纲")
+		}
+		return
+	}
+	if p.result.DisplayedGeneration != p.displayed {
+		ui.Spinner(c).Label("正在读取大纲").Margin(pdfOutlineLabelInset(c.Theme()))
+		return
+	}
+	if len(p.rows) == 0 {
+		label := "此 PDF 没有大纲"
+		if p.result.Err != nil {
+			label = "无法读取大纲"
+		}
+		outlineStatus(c, label)
+		return
+	}
+	if p.result.Err != nil || p.result.Truncated {
+		outlineStatus(c, "大纲未完整显示")
+	}
+	a.pdfOutlineList(c, focusColor)
+}
+
+func outlineStatus(c *ui.Context, text string) {
+	t := c.Theme()
+	ui.Text(c, text).FontSize(detailFontSize).TextColor(t.TextMuted).
+		PaddingX(pdfOutlineLabelInset(t)).Shrink(0)
+}
+
+func (a *App) pdfOutlineList(c *ui.Context, focusColor ui.Color) {
+	p := &a.pdfOutline
+	tree := &p.tree
+	tree.List.Selected, tree.List.Label = &p.selection, p.rowLabel
+	var prefix ui.OutlineRow
+	tree.Prefix = func(row ui.OutlineRow) { prefix = row }
+	defer func() { tree.Prefix = nil }()
+	current := p.visibleCurrentRow()
+	id := -1
+	if current >= 0 {
+		id = p.rows[current].id
+	}
+	position := ui.Box(c.Key("outline-position")).Absolute().Size(0, 0).PassThrough()
+	previous := ui.Local(position, "current-heading", func() int { return -2 })
+	if *previous != id {
+		*previous = id
+		if current >= 0 {
+			row := p.visibleRowIndex(current)
+			if !tree.List.Handle.FocusWithin(c) {
+				tree.List.Choose(row)
+			}
+			tree.List.ScrollIntoView(row)
+		}
+	}
+	clicked := -1
+	ui.Outline(c.Key("pdf-outline-tree"), tree, p.roots, p.children, func(id int) {
+		index := p.indexes[id]
+		selected := p.selection >= 0 && p.selection < tree.Rows() && tree.Item(p.selection) == id
+		if pdfOutlineTitleRow(c, prefix, p.rows[index], current == index, selected && tree.List.FocusWithin(c)) {
+			clicked = index
+		}
+	}).Grow(1).MinHeight(0).MinWidth(0).Label("章节").FocusRingColor(focusColor).OnSubmit(func() {
+		if index := p.selection; index >= 0 && index < tree.Rows() {
+			a.jumpPDFOutline(p.indexes[tree.Item(index)])
+		}
+	})
+	if clicked >= 0 {
+		a.jumpPDFOutline(clicked)
+		c.AnimationFrame()
+	}
+}
+
+func (p *pdfOutlineState) children(id int) []int { return p.rows[p.indexes[id]].children }
+
+func (p *pdfOutlineState) rowLabel(index int) string {
+	entry := p.rows[p.indexes[p.tree.Item(index)]].entry
+	title := cmp.Or(entry.Title, "未命名书签")
+	if entry.Page > 0 {
+		return fmt.Sprintf("%s，第 %d 页", title, entry.Page)
+	}
+	return title
+}
+
+func pdfOutlineTitleRow(c *ui.Context, row ui.OutlineRow, item pdfOutlineRow, current, keyboardSelected bool) bool {
+	t := c.Theme()
+	title := cmp.Or(item.entry.Title, "未命名书签")
+	line := ui.Row(c).Height(pdfOutlineRowHeight).Grow(1).MinWidth(0).AlignItems(ui.Center)
+	text, background := t.TextMuted, t.Background
+	switch {
+	case current:
+		text, background = t.Text, selectedFill(t).Over(t.Background)
+	case keyboardSelected:
+		text, background = t.Text, buttonFill(t).Over(t.Background)
+	case line.Hovered():
+		text, background = t.Text, rowFill(t).Over(t.Background)
+	}
+	var titleRow ui.Element
+	line.Children(func() {
+		ui.Row(c).Width(t.Space(2)).Shrink(0).AlignItems(ui.Center).Children(func() {
+			if current {
+				ui.Box(c).Size(pdfOutlineMarkerWidth, pdfOutlineMarkerHeight).
+					Radius(pdfOutlineMarkerWidth / 2).Background(t.Text)
+			}
+		})
+		ui.Row(c).Grow(1).MinWidth(0).Height(pdfOutlineRowHeight-2).AlignItems(ui.Center).
+			Radius(t.Radius).Padding(0, t.Space(2), 0, float32(min(row.Depth, 4))*pdfOutlineIndent).
+			Background(background).Children(func() {
+			pdfOutlineArrow(c, row)
+			titleRow = ui.Row(c).Grow(1).MinWidth(0).AlignSelf(ui.Stretch).AlignItems(ui.Center).Tooltip(title)
+			if item.entry.Page > 0 {
+				titleRow.Cursor(ui.CursorPointer)
+			}
+			titleRow.Children(func() {
+				label := ui.Text(c, title).FontSize(textSize).TextColor(text).SingleLine().Ellipsis("…").Grow(1).MinWidth(0)
+				if current {
+					label.FontWeight(600).Current(ui.CurrentLocation)
+				}
+			})
+		})
+	})
+	return item.entry.Page > 0 && titleRow.RowClicked()
+}
+
+func pdfOutlineArrow(c *ui.Context, row ui.OutlineRow) {
+	arrow := row.Arrow().Size(pdfOutlineArrowSize, pdfOutlineRowHeight-2).Center()
+	if !row.Branch {
+		return
+	}
+	t := c.Theme()
+	angle := float32(90)
+	if row.Open {
+		angle = 180
+	}
+	arrow.Cursor(ui.CursorPointer).Children(func() {
+		ui.Icon(c, iconChevronUp).FontSize(iconSmallSize).TextColor(t.TextMuted).Rotate(angle)
+	})
+}

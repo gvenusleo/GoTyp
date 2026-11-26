@@ -41,22 +41,28 @@ func (a *App) configurePreview(s *session) {
 }
 
 func (a *App) exportPDFDialog() {
-	s := a.current
-	if s == nil || s.kind != vault.KindTypst || a.vault == nil || a.busy {
+	if s := a.current; s != nil {
+		a.exportPDFFileDialog(s.id)
+	}
+}
+
+func (a *App) exportPDFFileDialog(id string) {
+	kind, _ := vault.KindFor(id)
+	if kind != vault.KindTypst || a.vault == nil || a.busy {
+		return
+	}
+	source, err := a.vault.Resolve(id)
+	if err != nil {
+		a.notify("PDF 导出失败：" + err.Error())
 		return
 	}
 	name, err := mygo.Dialog.Save(mygo.SaveDialogOptions{
 		Parent: a.win, Title: "导出 PDF",
-		DefaultPath:       filepath.Join(a.vault.Root(), filepath.FromSlash(strings.TrimSuffix(s.id, path.Ext(s.id))+".pdf")),
+		DefaultPath:       filepath.Join(a.vault.Root(), filepath.FromSlash(strings.TrimSuffix(id, path.Ext(id))+".pdf")),
 		Filters:           []mygo.FileFilter{{Name: "PDF", Extensions: []string{"pdf"}}},
 		CreateDirectories: true,
 	})
 	if err != nil || name == "" {
-		return
-	}
-	source, err := a.vault.Resolve(s.id)
-	if err != nil {
-		a.notify("PDF 导出失败：" + err.Error())
 		return
 	}
 	ctx, cancel := context.WithTimeout(a.ctx, exportTimeout)

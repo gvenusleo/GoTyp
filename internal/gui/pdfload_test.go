@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -27,6 +28,27 @@ func TestPDFStateChangedCompletesOnlyCurrentRequest(t *testing.T) {
 	a.pdfStateChanged(state)
 	if len(completed) != 1 || completed[0] != state || a.previewLoaded != nil {
 		t.Fatalf("完成回调状态不符：%+v", completed)
+	}
+}
+
+func TestPDFRefreshRetiresPendingOutlineRead(t *testing.T) {
+	a := newApp()
+	t.Cleanup(a.cancel)
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	a.pdfOutline = pdfOutlineState{
+		displayed: 1, load: 1, request: 2, cancel: cancel,
+		result: pdf.OutlineResult{DisplayedGeneration: 1},
+	}
+	// 原图仍在显示时，新加载会取消组件中的大纲读取。
+	a.pdfStateChanged(pdf.State{RequestGeneration: 2, DisplayedGeneration: 1, Loading: true})
+	if ctx.Err() == nil || a.pdfOutline.request != 0 {
+		t.Fatal("刷新后仍在等待已取消的大纲请求")
+	}
+	// 刷新失败时旧 PDF 留在屏幕上，仍可使用同一代大纲。
+	a.pdfStateChanged(pdf.State{RequestGeneration: 2, DisplayedGeneration: 1, Err: errors.New("刷新失败")})
+	if a.pdfOutline.displayed != 1 || a.pdfOutline.result.DisplayedGeneration != 1 {
+		t.Fatal("刷新失败后丢失了正在显示的大纲")
 	}
 }
 

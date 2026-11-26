@@ -154,7 +154,11 @@ func (a *App) contentView(c *ui.Context) {
 // contentWidth 估算内容区宽度，供分屏选择左右或上下布局。
 func (a *App) contentWidth(c *ui.Context) float32 {
 	width, _ := c.Size()
-	return width - a.sidebarWidth*a.sidebarShown
+	width -= a.fileSidebarWidth*a.sidebarShown + a.outlineWidth
+	if a.sidebarShown >= 1 {
+		width--
+	}
+	return width
 }
 
 func (a *App) splitView(c *ui.Context, s *session) {

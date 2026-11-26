@@ -1,10 +1,6 @@
 package gui
 
-import (
-	"github.com/egoist/mygo/ui"
-
-	"gotyp/internal/vault"
-)
+import "github.com/egoist/mygo/ui"
 
 var (
 	modeIcons  = []*ui.SVG{iconPencil, iconColumns, iconEye}
@@ -16,7 +12,9 @@ func (a *App) headerView(c *ui.Context, s *session) {
 	t := c.Theme()
 	// 侧栏收起时给固定的侧栏开关让出位置，按展开程度插值，整个动画期间标题匀速让位。
 	left := float32(tabInset) + (1-a.sidebarShown)*(toggleInset(c)+barButton)
-	header := ui.Row(c).Height(headerHeight).Shrink(0).Padding(0, t.Space(3), 0, left).Gap(tabToolsGap).
+	// 只为仍伸入文档头的右侧栏按钮预留空间。
+	right := t.Space(3) + max(0, barButton+tabToolsGap-a.outlineWidth)
+	header := ui.Row(c).Height(headerHeight).Shrink(0).Padding(0, right, 0, left).Gap(tabToolsGap).
 		AlignItems(ui.Center).DragWindow()
 	showMode := s != nil && s.kind != 0
 	previous := ui.Local(header, "show-mode", func() bool { return showMode })
@@ -24,18 +22,14 @@ func (a *App) headerView(c *ui.Context, s *session) {
 	narrowing := showMode && !*previous
 	*previous = showMode
 	header.Children(func() {
-		id := a.openID()
 		if len(a.tabs) > 0 {
-			a.tabsView(c, narrowing)
+			a.tabsView(c, narrowing || a.outlineResizing)
 		} else {
 			ui.Spacer(c)
 		}
 		// 只有笔记有预览，纯文本和查看器不显示模式切换。
 		if showMode {
 			a.modeSwitch(c)
-		}
-		if id != "" {
-			ghostButton(c, "更多", iconEllipsis).Menu(a.moreMenu)
 		}
 	})
 	ui.Divider(c)
@@ -59,40 +53,4 @@ func (a *App) modeSwitch(c *ui.Context) {
 			part.Children(func() { ui.Icon(c, svg).FontSize(iconSize).TextColor(color) })
 		}
 	}).OnChange(a.modeChanged)
-}
-
-// moreMenu 收纳低频动作。
-func (a *App) moreMenu(m *ui.Menu) {
-	id := a.openID()
-	if id == "" {
-		return
-	}
-	s := a.current
-	if s == nil && m.Item("在默认应用中打开").Chosen() {
-		a.openVaultFile(id)
-	}
-	if m.Item("复制路径").Chosen() {
-		a.copyCurrentPath()
-	}
-	if m.Item("在文件管理器中显示").Chosen() {
-		a.revealCurrent()
-	}
-	if m.Item("重命名…").Chosen() {
-		a.startRename(id)
-	}
-	if s == nil {
-		return
-	}
-	if s.kind == vault.KindTypst {
-		if m.Item("导出 PDF…").Shortcut(ui.Cmd, ui.KeyE).Disabled(a.busy).Chosen() {
-			a.exportPDFDialog()
-		}
-	}
-	m.Separator()
-	if m.Item("显示行号").Checked(a.lineNumbers).Chosen() {
-		a.toggleLineNumbers()
-	}
-	if m.Item("专注模式").Checked(a.focus).Chosen() {
-		a.toggleFocus()
-	}
 }

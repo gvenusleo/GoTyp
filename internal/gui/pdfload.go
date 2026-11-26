@@ -27,6 +27,7 @@ func (a *App) loadPreviewFile(ctx context.Context, file *tinymist.PreviewFile, f
 }
 
 func (a *App) pdfStateChanged(state pdf.State) {
+	a.updatePDFOutline(state)
 	if state.Loading || a.previewLoaded == nil || state.RequestGeneration != a.previewRequest {
 		return
 	}
@@ -41,5 +42,7 @@ func (a *App) pdfStateChanged(state pdf.State) {
 
 func (a *App) clearPreview() {
 	a.previewRequest, a.previewLoaded = 0, nil
+	a.pdfOutline.cancelRead()
+	a.pdfOutline = pdfOutlineState{}
 	a.preview.Clear()
 }

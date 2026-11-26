@@ -60,6 +60,23 @@ func clampSidebar(w, window float32) float32 {
 	return min(max(w, sidebarMin), upper)
 }
 
+// resizeOutlineWidth 只在可见宽度改变时更新会话偏好。
+func (a *App) resizeOutlineWidth(want, available float32) {
+	width := clampOutlineWidth(want, available)
+	if width != clampOutlineWidth(a.outlinePreferredWidth, available) {
+		a.setOutlineWidth(width)
+	}
+}
+
+func (a *App) setOutlineWidth(width float32) {
+	a.outlinePreferredWidth = width
+	a.revealTab = a.activeTab != nil
+}
+
+func clampOutlineWidth(width, available float32) float32 {
+	return min(max(width, pdfOutlineMinWidth), pdfOutlineMaxWidth, max(0, available))
+}
+
 // syncSelection 让文件树的选中行回到当前笔记，切换被拒绝或失败后侧栏不与内容区脱节。
 func (a *App) syncSelection() {
 	a.chosen.Clear()
