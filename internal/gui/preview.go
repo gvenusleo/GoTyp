@@ -41,27 +41,34 @@ func (a *App) configurePreview(s *session) {
 }
 
 func (a *App) exportPDFDialog() {
-	s := a.current
-	if s == nil || s.kind != vault.KindTypst || a.vault == nil || a.busy {
+	if s := a.current; s != nil {
+		a.exportPDFFileDialog(s.id)
+	}
+}
+
+func (a *App) exportPDFFileDialog(id string) {
+	kind, _ := vault.KindFor(id)
+	v := a.vault
+	if kind != vault.KindTypst || v == nil || a.busy {
 		return
 	}
 	name, err := mygo.Dialog.Save(mygo.SaveDialogOptions{
 		Parent: a.win, Title: "导出 PDF",
-		DefaultPath:       filepath.Join(a.vault.Root(), filepath.FromSlash(strings.TrimSuffix(s.id, path.Ext(s.id))+".pdf")),
+		DefaultPath:       filepath.Join(v.Root(), filepath.FromSlash(strings.TrimSuffix(id, path.Ext(id))+".pdf")),
 		Filters:           []mygo.FileFilter{{Name: "PDF", Extensions: []string{"pdf"}}},
 		CreateDirectories: true,
 	})
-	if err != nil || name == "" {
+	if err != nil || name == "" || a.vault != v || a.ctx.Err() != nil {
 		return
 	}
-	source, err := a.vault.Resolve(s.id)
+	source, err := v.Resolve(id)
 	if err != nil {
 		a.notify("PDF 导出失败：" + err.Error())
 		return
 	}
 	ctx, cancel := context.WithTimeout(a.ctx, exportTimeout)
 	defer cancel()
-	data, err := tinymist.ExportPDF(ctx, a.vault.Root(), source)
+	data, err := tinymist.ExportPDF(ctx, v.Root(), source)
 	if errors.Is(err, context.DeadlineExceeded) {
 		err = errors.New("编译超时")
 	}

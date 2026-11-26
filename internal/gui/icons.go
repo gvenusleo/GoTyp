@@ -15,6 +15,7 @@ var iconFiles embed.FS
 
 var (
 	iconPanelLeft      = icon("panel-left")
+	iconPanelRight     = icon("panel-right")
 	iconPlus           = icon("plus")
 	iconSearch         = icon("search")
 	iconHash           = icon("hash")
@@ -35,7 +36,6 @@ var (
 	iconPencil         = icon("pencil-line")
 	iconColumns        = icon("columns-2")
 	iconEye            = icon("eye")
-	iconEllipsis       = icon("ellipsis")
 	iconCopy           = icon("copy")
 	iconChevronsUpDown = icon("chevrons-up-down")
 	iconChevronUp      = icon("chevron-up")

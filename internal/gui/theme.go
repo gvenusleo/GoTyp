@@ -31,6 +31,14 @@ const (
 	textWidth                = 720
 	previewInset             = 20
 	previewSideInset         = 28
+	pdfOutlineWidth          = 248
+	pdfOutlineMinWidth       = 180
+	pdfOutlineMaxWidth       = 420
+	pdfOutlineRowHeight      = 28
+	pdfOutlineArrowSize      = 16
+	pdfOutlineIndent         = 12
+	pdfOutlineMarkerWidth    = 2
+	pdfOutlineMarkerHeight   = 14
 	emptyInset               = 24
 	alertMessageWidth        = 168
 	diagnosticsHeight        = 180
@@ -125,6 +133,7 @@ type themeCache struct {
 	appearance vault.Appearance
 	app        *ui.Theme
 	sidebar    *ui.Theme
+	outline    *ui.Theme
 	code       *editor.Theme
 	md         *markdown.Theme
 	preview    *markdown.Theme
@@ -138,7 +147,7 @@ func (a *App) applyTheme(c *ui.Context) {
 		code := codeTheme(app)
 		md := mdTheme(app, code, codeFamily(ap.CodeFont))
 		a.themes = themeCache{
-			base: base, appearance: ap, app: app, sidebar: sidebarTheme(*app),
+			base: base, appearance: ap, app: app, sidebar: sidebarTheme(*app), outline: outlineTheme(*app),
 			code: code, md: md, preview: previewTheme(app, md),
 		}
 	}
@@ -186,6 +195,17 @@ func sidebarTheme(t ui.Theme) *ui.Theme {
 	t.AccentText = t.Text
 	t.InactiveAccent = t.Accent
 	t.SurfaceHover = rowFill(&t)
+	return &t
+}
+
+func pdfOutlineLabelInset(t *ui.Theme) float32 { return t.Space(2) + pdfOutlineArrowSize }
+
+// 大纲用内层圆角和短标记区分当前章节，列表本身继续处理键盘选中。
+func outlineTheme(t ui.Theme) *ui.Theme {
+	t.Accent = t.Background
+	t.InactiveAccent = t.Background
+	t.AccentText = t.Text
+	t.SurfaceHover = t.Background
 	return &t
 }
 

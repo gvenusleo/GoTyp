@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"math"
 	"path/filepath"
 
 	"github.com/egoist/mygo/ui"
@@ -271,8 +272,13 @@ func (a *App) itemMenu(m *ui.Menu, id string) {
 	if m.Item("复制路径").Chosen() {
 		a.copyPath(id)
 	}
-	if !a.tree.Dirs[id] && m.Item("在默认应用中打开").Chosen() {
-		a.openVaultFile(id)
+	if !a.tree.Dirs[id] {
+		if m.Item("在默认应用中打开").Chosen() {
+			a.openVaultFile(id)
+		}
+		if kind, _ := vault.KindFor(id); kind == vault.KindTypst && m.Item("导出 PDF…").Disabled(a.busy).Chosen() {
+			a.exportPDFFileDialog(id)
+		}
 	}
 	if m.Item("在文件管理器中显示").Chosen() {
 		if name, err := a.vault.Resolve(id); err == nil {
@@ -285,43 +291,131 @@ func (a *App) itemMenu(m *ui.Menu, id string) {
 	}
 }
 
-// workspaceView 并排放置侧栏与内容区，侧栏的展开与收起带动画：
-//   - 完全展开时用 ui.Split，分隔条的拖动、光标、键盘操作和双击恢复都由它负责；
-//   - 动画途中用固定宽度的列，侧栏内容保持完整宽度、只被裁剪，不逐帧重新换行；
-//   - 完全收起时只有内容区。
+// workspaceView 保持编辑区与右侧栏的父级稳定，侧栏开合时只改变可见宽度。
 func (a *App) workspaceView(c *ui.Context) {
 	width, _ := c.Size()
-	target := float32(1)
+	leftTarget := float32(1)
 	if a.sidebarHidden || a.focus {
-		target = 0
+		leftTarget = 0
 	}
-	// 动画值挂在不占位的元素上，只动画展开程度，拖动宽度时不受动画影响。
-	shown := ui.Box(c.Key("sidebar-anim")).Size(0, 0).AnimateTo("shown", target, sidebarMotion)
-	a.sidebarShown = shown
-	a.sidebarWidth = clampSidebar(a.sidebarWidth, width)
+	a.sidebarShown = ui.Box(c.Key("sidebar-anim")).Size(0, 0).AnimateTo("shown", leftTarget, sidebarMotion)
+	rightTarget := float32(0)
+	if a.outlineSidebar && !a.focus {
+		rightTarget = 1
+	}
+	rightShown := ui.Box(c.Key("outline-sidebar-anim")).Size(0, 0).AnimateTo("shown", rightTarget, sidebarMotion)
+	available := width - minContentWidth - 1
+	if a.sidebarShown > 0 {
+		available -= sidebarMin + 1
+	}
+	rightWidth := clampOutlineWidth(a.outlinePreferredWidth, available) + 1
+	previousWidth := a.outlineWidth
+	a.outlineWidth = rightWidth * rightShown
+	if a.outlineResizing && a.outlineWidth != previousWidth {
+		a.revealTab = a.activeTab != nil
+	}
+	contentWidth := width - a.outlineWidth
+	if a.sidebarShown >= 1 {
+		contentWidth-- // 左侧栏分隔线由 Split 绘制。
+	}
+	a.fileSidebarWidth = clampSidebar(a.sidebarWidth, contentWidth)
 	ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() {
-		switch {
-		case shown >= 1:
-			ui.Split(c, &a.sidebarWidth, func() { a.sidebarView(c) }, func() { a.contentView(c) }).
-				SplitReset(sidebarDefault).OnChange(a.persistWorkspace).Fill()
-			// Split 只保证两侧各留 40，宽度范围在这里限制，拖动的同一帧生效。
-			a.sidebarWidth = clampSidebar(a.sidebarWidth, width)
-		case shown > 0:
-			ui.Column(c.Key("sidebar")).Width(a.sidebarWidth*shown).Shrink(0).ClipX().
-				BorderWidth(0, 1, 0, 0).BorderColor(c.Theme().Border).Children(func() {
-				ui.Column(c).Width(a.sidebarWidth).Shrink(0).Grow(1).Children(func() { a.sidebarView(c) })
-			})
-			a.contentView(c)
-		default:
-			a.contentView(c)
+		a.workspaceContentView(c, contentWidth)
+		if a.outlineWidth > 0 {
+			a.outlinePane(c, rightWidth)
+		}
+		if a.outlineSidebar && rightShown == 1 {
+			a.outlineDivider(c, available)
 		}
 		if !a.focus {
-			label := "隐藏侧栏"
-			if a.sidebarHidden {
-				label = "显示侧栏"
-			}
-			ghostButton(c.Key("sidebar-toggle"), label, iconPanelLeft).Absolute().
-				Top((headerHeight - barButton) / 2).Left(toggleInset(c)).OnClick(a.toggleSidebar)
+			a.sidebarToggles(c)
 		}
 	})
+	if rightShown == rightTarget {
+		a.outlineResizing = false
+	}
+}
+
+func (a *App) outlinePane(c *ui.Context, width float32) {
+	t := c.Theme()
+	ui.Column(c.Key("outline-sidebar-clip")).Width(a.outlineWidth).Shrink(0).MinHeight(0).ClipX().
+		BorderWidth(0, 0, 0, 1).BorderColor(t.Border).Children(func() {
+		ui.Row(c).Width(width - 1).Grow(1).MinHeight(0).Children(func() { a.outlineSidebarView(c) })
+	})
+}
+
+func (a *App) outlineDivider(c *ui.Context, available float32) {
+	t := c.Theme()
+	gripWidth := t.Space(2)
+	width := a.outlineWidth - 1
+	grip := ui.Box(c.Key("outline-divider")).Absolute().Top(0).Bottom(0).
+		Right(width + 0.5 - gripWidth/2).Width(gripWidth).Cursor(ui.CursorResizeEW).
+		Role(ui.RoleSplitter).Orientation(ui.Vertical).Label("调整右侧栏宽度").Focusable()
+	grip.OnShortcut(0, ui.KeyLeft, func() { a.resizeOutlineWidth(width+t.Space(2.5), available) }).
+		OnShortcut(0, ui.KeyRight, func() { a.resizeOutlineWidth(width-t.Space(2.5), available) }).
+		OnShortcut(0, ui.KeyEnter, func() { a.setOutlineWidth(pdfOutlineWidth) })
+	// 从按下时的显示宽度累计指针位移，限宽时也保留超出的距离。
+	wanted := ui.Local(grip, "drag-width", func() float32 { return width })
+	dx, _, held := grip.Dragged()
+	switch {
+	case grip.DoubleClicked():
+		a.setOutlineWidth(pdfOutlineWidth)
+		*wanted = clampOutlineWidth(pdfOutlineWidth, available)
+		c.AnimationFrame()
+	case !held:
+		*wanted = width
+	case dx != 0:
+		*wanted -= dx
+		a.resizeOutlineWidth(*wanted, available)
+		c.AnimationFrame()
+	}
+	if held || grip.Hovered() {
+		grip.Children(func() {
+			ui.Box(c).Absolute().Top(0).Bottom(0).Left((gripWidth - 1) / 2).Width(1).Background(t.Accent).PassThrough()
+		})
+	}
+}
+
+func (a *App) workspaceContentView(c *ui.Context, width float32) {
+	switch shown := a.sidebarShown; {
+	case shown >= 1:
+		// 双击重置要保留默认宽度，即使当前窗口放不下。拖动和方向键只会产生窗口内的宽度。
+		const resetWidth = math.MaxFloat32
+		want := a.fileSidebarWidth
+		ui.Split(c, &want, func() { a.sidebarView(c) }, func() { a.contentView(c) }).
+			SplitReset(resetWidth).OnChange(func() {
+			next := clampSidebar(want, width)
+			if want == resetWidth {
+				next = sidebarDefault
+			} else if next == a.fileSidebarWidth {
+				return
+			}
+			a.sidebarWidth = next
+			a.persistWorkspace()
+		}).Grow(1).MinWidth(0)
+	case shown > 0:
+		ui.Column(c.Key("sidebar")).Width(a.fileSidebarWidth*shown).Shrink(0).ClipX().
+			BorderWidth(0, 1, 0, 0).BorderColor(c.Theme().Border).Children(func() {
+			ui.Column(c).Width(a.fileSidebarWidth).Shrink(0).Grow(1).Children(func() { a.sidebarView(c) })
+		})
+		a.contentView(c)
+	default:
+		a.contentView(c)
+	}
+}
+
+func (a *App) sidebarToggles(c *ui.Context) {
+	left := "隐藏侧栏"
+	if a.sidebarHidden {
+		left = "显示侧栏"
+	}
+	ghostButton(c.Key("sidebar-toggle"), left, iconPanelLeft).Absolute().
+		Top((headerHeight - barButton) / 2).Left(toggleInset(c)).OnClick(a.toggleSidebar)
+	right := "显示右侧栏"
+	if a.outlineSidebar {
+		right = "隐藏右侧栏"
+	}
+	ghostButton(c.Key("outline-sidebar-toggle"), right, iconPanelRight).KeepFocus().Absolute().
+		Top((headerHeight - barButton) / 2).Right(c.Theme().Space(3)).Expanded(a.outlineSidebar).
+		OnClick(a.toggleOutlineSidebar)
 }

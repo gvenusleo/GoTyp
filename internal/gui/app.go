@@ -54,6 +54,7 @@ type App struct {
 	previewLoaded  func(pdf.State)
 	previewRequest uint64
 	previewFiles   sync.WaitGroup
+	pdfOutline     pdfOutlineState
 	lspSeq         uint64
 	// pendingJump 是打开另一篇笔记后要移动到的位置，见 typstedit.go。
 	pendingJump  *noteJump
@@ -68,17 +69,22 @@ type App struct {
 
 	sidebarWidth float32
 	// sidebarShown 是侧栏展开程度：1 完全展开，0 完全收起，动画中取中间值。
-	sidebarShown  float32
-	editorPercent float32
-	sidebarHidden bool
-	mode          int
-	lineNumbers   bool
-	tabs          []*fileTab
-	activeTab     *fileTab
-	tabIndex      int // MyGo 的标签选择索引，活动文件由 activeTab 决定。
-	revealTab     bool
-	tabScroll     ui.ScrollState
-	current       *session
+	sidebarShown          float32
+	fileSidebarWidth      float32 // 当前帧左侧栏的完整宽度。
+	outlineWidth          float32 // 当前帧右侧栏占用的宽度。
+	outlinePreferredWidth float32
+	outlineSidebar        bool
+	outlineResizing       bool
+	editorPercent         float32
+	sidebarHidden         bool
+	mode                  int
+	lineNumbers           bool
+	tabs                  []*fileTab
+	activeTab             *fileTab
+	tabIndex              int // MyGo 的标签选择索引，活动文件由 activeTab 决定。
+	revealTab             bool
+	tabScroll             ui.ScrollState
+	current               *session
 	// viewing 是当前打开的图片或无法以文本打开的文件，与 current 至多一个不为空。
 	viewing    *viewer
 	readingPDF *pdfRead
@@ -106,7 +112,10 @@ type App struct {
 
 func newApp() *App {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &App{ctx: ctx, cancel: cancel, sidebarWidth: sidebarDefault, sidebarShown: 1, editorPercent: 50, mode: modeSplit, lineNumbers: true, selectedRow: -1}
+	return &App{
+		ctx: ctx, cancel: cancel, sidebarWidth: sidebarDefault, sidebarShown: 1, outlinePreferredWidth: pdfOutlineWidth,
+		editorPercent: 50, mode: modeSplit, lineNumbers: true, selectedRow: -1,
+	}
 }
 
 // Run 启动 GoTyp 桌面应用。
@@ -292,6 +301,11 @@ func (a *App) toggleSidebar() {
 	a.sidebarHidden = !a.sidebarHidden
 	a.persistWorkspace()
 	a.refreshMenu()
+}
+
+func (a *App) toggleOutlineSidebar() {
+	a.outlineSidebar = !a.outlineSidebar
+	a.outlineResizing = true
 }
 
 func (a *App) publish(fn func()) {
