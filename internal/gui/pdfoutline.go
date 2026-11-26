@@ -2,6 +2,7 @@ package gui
 
 import (
 	"context"
+	"hash/maphash"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/gvenusleo/mygo-pdf/pdf"
@@ -23,9 +24,13 @@ type pdfOutlineState struct {
 }
 
 type pdfOutlineKey struct {
-	parent, occurrence int
-	title              string
+	parent   int
+	title    string
+	page     int // 零表示只按标题匹配，正数是叶子的页码加一，负数表示分支。
+	children uint64
 }
+
+var outlineTitleSeed = maphash.MakeSeed()
 
 type pdfOutlineRow struct {
 	entry    pdf.OutlineEntry
@@ -113,8 +118,8 @@ func (p *pdfOutlineState) setResult(result pdf.OutlineResult) {
 			p.tree.Open.Add(row.id)
 		}
 	}
-	for key, id := range previous {
-		if _, exists := p.keys[key]; !exists {
+	for id := range oldIndexes {
+		if _, exists := p.indexes[id]; !exists {
 			p.tree.Open.Remove(id)
 		}
 	}
@@ -127,16 +132,33 @@ func (p *pdfOutlineState) indexEntries(entries []pdf.OutlineEntry, parent, paren
 		return nil
 	}
 	rows := make([]int, 0, len(entries))
-	occurrences := make(map[string]int)
-	for _, entry := range entries {
-		key := pdfOutlineKey{parent: parentID, title: entry.Title, occurrence: occurrences[entry.Title]}
-		occurrences[entry.Title]++
-		id := previous[key]
+	keys := make([]pdfOutlineKey, len(entries))
+	counts := make(map[pdfOutlineKey]int)
+	for i, entry := range entries {
+		keys[i] = outlineEntryKey(parentID, entry)
+		counts[pdfOutlineKey{parent: parentID, title: entry.Title}]++
+		counts[keys[i]]++
+	}
+	for i, entry := range entries {
+		title := pdfOutlineKey{parent: parentID, title: entry.Title}
+		detail := keys[i]
+		id := 0
+		if counts[title] == 1 {
+			id = previous[title]
+		}
+		if id == 0 && counts[detail] == 1 {
+			id = previous[detail]
+		}
 		if id == 0 {
 			p.nextID++
 			id = p.nextID
 		}
-		p.keys[key] = id
+		if counts[title] == 1 {
+			p.keys[title] = id
+		}
+		if counts[detail] == 1 {
+			p.keys[detail] = id
+		}
 		index := len(p.rows)
 		p.rows = append(p.rows, pdfOutlineRow{entry: entry, id: id, parent: parent})
 		p.indexes[id] = index
@@ -146,6 +168,20 @@ func (p *pdfOutlineState) indexEntries(entries []pdf.OutlineEntry, parent, paren
 		rows = append(rows, id)
 	}
 	return rows
+}
+
+func outlineEntryKey(parent int, entry pdf.OutlineEntry) pdfOutlineKey {
+	if len(entry.Children) == 0 {
+		return pdfOutlineKey{parent: parent, title: entry.Title, page: entry.Page + 1}
+	}
+	// 子标题能区分同名分支，也不会因前面插页而改变。
+	var titles maphash.Hash
+	titles.SetSeed(outlineTitleSeed)
+	maphash.WriteComparable(&titles, len(entry.Children))
+	for _, child := range entry.Children {
+		maphash.WriteComparable(&titles, child.Title)
+	}
+	return pdfOutlineKey{parent: parent, title: entry.Title, page: -1, children: titles.Sum64()}
 }
 
 func (p *pdfOutlineState) visibleCurrentRow() int {

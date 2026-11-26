@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"math"
 	"path/filepath"
 
 	"github.com/egoist/mygo/ui"
@@ -317,7 +318,6 @@ func (a *App) workspaceView(c *ui.Context) {
 	if a.sidebarShown >= 1 {
 		contentWidth-- // 左侧栏分隔线由 Split 绘制。
 	}
-	a.sidebarWidth = clampSidebar(a.sidebarWidth, width)
 	a.fileSidebarWidth = clampSidebar(a.sidebarWidth, contentWidth)
 	ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() {
 		a.workspaceContentView(c, contentWidth)
@@ -379,12 +379,20 @@ func (a *App) outlineDivider(c *ui.Context, available float32) {
 func (a *App) workspaceContentView(c *ui.Context, width float32) {
 	switch shown := a.sidebarShown; {
 	case shown >= 1:
-		ui.Split(c, &a.fileSidebarWidth, func() { a.sidebarView(c) }, func() { a.contentView(c) }).
-			SplitReset(sidebarDefault).OnChange(func() {
-			a.sidebarWidth = clampSidebar(a.fileSidebarWidth, width)
+		// 双击重置要保留默认宽度，即使当前窗口放不下。拖动和方向键只会产生窗口内的宽度。
+		const resetWidth = math.MaxFloat32
+		want := a.fileSidebarWidth
+		ui.Split(c, &want, func() { a.sidebarView(c) }, func() { a.contentView(c) }).
+			SplitReset(resetWidth).OnChange(func() {
+			next := clampSidebar(want, width)
+			if want == resetWidth {
+				next = sidebarDefault
+			} else if next == a.fileSidebarWidth {
+				return
+			}
+			a.sidebarWidth = next
 			a.persistWorkspace()
 		}).Grow(1).MinWidth(0)
-		a.fileSidebarWidth = clampSidebar(a.fileSidebarWidth, width)
 	case shown > 0:
 		ui.Column(c.Key("sidebar")).Width(a.fileSidebarWidth*shown).Shrink(0).ClipX().
 			BorderWidth(0, 1, 0, 0).BorderColor(c.Theme().Border).Children(func() {
@@ -407,7 +415,7 @@ func (a *App) sidebarToggles(c *ui.Context) {
 	if a.outlineSidebar {
 		right = "隐藏右侧栏"
 	}
-	ghostButton(c.Key("outline-sidebar-toggle"), right, iconPanelRight).Absolute().
+	ghostButton(c.Key("outline-sidebar-toggle"), right, iconPanelRight).KeepFocus().Absolute().
 		Top((headerHeight - barButton) / 2).Right(c.Theme().Space(3)).Expanded(a.outlineSidebar).
 		OnClick(a.toggleOutlineSidebar)
 }
