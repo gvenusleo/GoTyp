@@ -25,11 +25,10 @@ func newCanvas() *canvas {
 	}
 }
 
-// trace 把多边形加进光栅器。光栅器按带符号的面积累加：实心的统一成正向，孔反向，
-// 同向的形状相叠不会变深，反向的才会抵消。
-func (c *canvas) trace(p poly, hole bool) {
-	p = slices.Clone(p)
-	if (area(p) > 0) == hole {
+// trace 按顺时针方向把多边形加进光栅器。
+func (c *canvas) trace(p poly) {
+	if area(p) < 0 {
+		p = slices.Clone(p)
 		slices.Reverse(p)
 	}
 	for i, v := range p {
@@ -42,16 +41,11 @@ func (c *canvas) trace(p poly, hole bool) {
 	c.z.ClosePath()
 }
 
-// fill 用 src 填充 shapes，holes 是其中挖掉的部分。
-func (c *canvas) fill(src image.Image, shapes []poly, holes ...poly) {
+// fill 用纯色填充形状。
+func (c *canvas) fill(col color.Color, shape poly) {
 	c.z.Reset(size, size)
-	for _, p := range shapes {
-		c.trace(p, false)
-	}
-	for _, p := range holes {
-		c.trace(p, true)
-	}
-	c.z.Draw(c.img, c.img.Bounds(), src, image.Point{})
+	c.trace(shape)
+	c.z.Draw(c.img, c.img.Bounds(), image.NewUniform(col), image.Point{})
 }
 
 // mask 把形状画成覆盖率遮罩。
@@ -59,7 +53,7 @@ func (c *canvas) mask(shapes ...poly) *image.Alpha {
 	m := image.NewAlpha(c.img.Bounds())
 	c.z.Reset(size, size)
 	for _, p := range shapes {
-		c.trace(p, false)
+		c.trace(p)
 	}
 	c.z.Draw(m, m.Bounds(), image.NewUniform(color.Alpha{255}), image.Point{})
 	return m
@@ -120,37 +114,11 @@ func box(dst, src []float32, n, r, stride, lines, lineStride int) {
 	}
 }
 
-// pixels 是由函数逐点给出颜色的图，用作渐变的来源。
-type pixels func(x, y int) color.Color
-
-func (pixels) ColorModel() color.Model   { return color.RGBAModel }
-func (pixels) Bounds() image.Rectangle   { return image.Rect(0, 0, size, size) }
-func (p pixels) At(x, y int) color.Color { return p(x, y) }
-
-func lerp(a, b color.RGBA, t float64) color.RGBA {
-	t = min(max(t, 0), 1)
-	mix := func(x, y uint8) uint8 { return uint8(float64(x)*(1-t) + float64(y)*t + 0.5) }
-	return color.RGBA{mix(a.R, b.R), mix(a.G, b.G), mix(a.B, b.B), 255}
-}
-
-// ramp 是纵坐标从 y0 到 y1 之间 a 到 b 的竖向渐变。
-func ramp(y0, y1 float64, a, b color.RGBA) image.Image {
-	return pixels(func(_, y int) color.Color { return lerp(a, b, (float64(y)-y0)/(y1-y0)) })
-}
-
-// plate 画底板：落在背景上的软影与发丝边、自左上到右下的渐变，再叠上顶部的柔光
-// 与沿内缘的一圈高光。底板是 824 见方，四周各留 100 像素，是 macOS 图标的规格。
-func (c *canvas) plate(a, b color.RGBA) {
-	body := []poly{squircle(size/2, size/2, 412)}
-	c.shade(color.NRGBA{10, 18, 32, 77}, 0, 14, 8, nil, body...)
-	c.fill(image.NewUniform(color.NRGBA{0, 0, 0, 26}), []poly{squircle(size/2, size/2, 413.2)})
-	c.fill(pixels(func(x, y int) color.Color {
-		return lerp(a, b, float64(x+y-200)/1648)
-	}), body)
-	c.fill(pixels(func(_, y int) color.Color { // 顶部的柔光，到六成高度消失
-		return color.NRGBA{255, 255, 255, uint8(76 * max(0, 1-float64(y-100)/494))}
-	}), body)
-	c.fill(pixels(func(_, y int) color.Color { // 内缘的高光，到半高消失
-		return color.NRGBA{255, 255, 255, uint8(166 * max(0, 1-float64(y-100)/412))}
-	}), body, squircle(size/2, size/2, 409))
+// plate 画带边框和软影的纯白底板。底板是 824 见方，四周各留 100 像素。
+func (c *canvas) plate() {
+	const radius = 412
+	body := squircle(size/2, size/2, radius)
+	c.shade(color.NRGBA{10, 18, 32, 77}, 0, 14, 8, nil, body)
+	c.fill(color.NRGBA{0, 0, 0, 26}, squircle(size/2, size/2, radius+1.2))
+	c.fill(color.White, body)
 }

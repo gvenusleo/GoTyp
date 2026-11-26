@@ -27,12 +27,6 @@ func shift(p poly, dx, dy float64) poly {
 	return q
 }
 
-// unit 返回 (x, y) 方向上的单位向量。
-func unit(x, y float64) pt {
-	l := math.Hypot(x, y)
-	return pt{x / l, y / l}
-}
-
 // squircle 是以 (cx, cy) 为中心、半边长 r 的连续圆角方块（超椭圆，指数 5），
 // 与 macOS 图标的轮廓相近。
 func squircle(cx, cy, r float64) poly {
@@ -48,34 +42,44 @@ func squircle(cx, cy, r float64) poly {
 	return p
 }
 
-// fillet 把各角都是直角的多边形每个角倒成半径 r 的圆角，凸角和凹角一样处理。
-func fillet(corners poly, r float64) poly {
-	const steps = 32
-	var p poly
-	for i, v := range corners {
-		prev, next := corners[(i+len(corners)-1)%len(corners)], corners[(i+1)%len(corners)]
-		a, b := unit(prev.x-v.x, prev.y-v.y), unit(next.x-v.x, next.y-v.y)
-		// 直角的圆心在两条边各退 r 处；圆弧从一条边上的切点 v+r·a 走到另一条边上的 v+r·b，
-		// 相对圆心分别是 -b 与 -a 方向。
-		c := pt{v.x + r*(a.x+b.x), v.y + r*(a.y+b.y)}
-		for k := range steps + 1 {
-			t := float64(k) / steps
-			d := unit(-(1-t)*b.x-t*a.x, -(1-t)*b.y-t*a.y)
-			p = append(p, pt{c.x + r*d.x, c.y + r*d.y})
-		}
+// slantedStep 沿一条等宽的斜折缝把圆角方块分成旋转对称的两片。
+func slantedStep() (poly, poly) {
+	const (
+		middle      = size / 2
+		nearEdge    = middle - 225
+		farEdge     = middle + 225
+		upperTurn   = middle - 64
+		lowerTurn   = middle + 64
+		halfGap     = 19
+		outerRadius = 56
+		endRadius   = 26
+		turnRadius  = 52
+		turnCenterX = upperTurn + turnRadius
+		turnCenterY = upperTurn - turnRadius*(math.Sqrt2-1)
+	)
+	var left poly
+	left = left.arc(pt{nearEdge + outerRadius, nearEdge + outerRadius}, outerRadius, 180, 270)
+	left = left.arc(pt{upperTurn - halfGap - endRadius, nearEdge + endRadius}, endRadius, 270, 360)
+	// 缝两侧的弧线与中心线同心，半径各差半个缝宽。
+	left = left.arc(pt{turnCenterX, turnCenterY}, turnRadius+halfGap, 180, 135)
+	left = left.arc(pt{size - turnCenterX, size - turnCenterY}, turnRadius-halfGap, -45, 0)
+	left = left.arc(pt{lowerTurn - halfGap - endRadius, farEdge - endRadius}, endRadius, 0, 90)
+	left = left.arc(pt{nearEdge + outerRadius, farEdge - outerRadius}, outerRadius, 90, 180)
+
+	right := make(poly, len(left))
+	for i, p := range left {
+		right[i] = pt{size - p.x, size - p.y}
 	}
-	return p
+	return left, right
 }
 
-// sheet 是左下角在 (x0, y1)、边长 n、圆角 r 的方块。notch 大于 0 时从它的左下角
-// 去掉边长 notch 的一块，成 L 形，好让内一层连同缝放进去。
-func sheet(x0, y1, n, notch, r float64) poly {
-	x1, y0 := x0+n, y1-n
-	if notch == 0 {
-		return fillet(poly{{x0, y0}, {x1, y0}, {x1, y1}, {x0, y1}}, r)
+// arc 将指定角度范围的圆弧接到轮廓上，角度单位为度。
+func (p poly) arc(center pt, radius, from, to float64) poly {
+	const steps = 32
+	for i := range steps + 1 {
+		angle := from + (to-from)*float64(i)/steps
+		sin, cos := math.Sincos(angle * math.Pi / 180)
+		p = append(p, pt{center.x + radius*cos, center.y + radius*sin})
 	}
-	return fillet(poly{
-		{x0, y0}, {x1, y0}, {x1, y1},
-		{x0 + notch, y1}, {x0 + notch, y1 - notch}, {x0, y1 - notch},
-	}, r)
+	return p
 }
