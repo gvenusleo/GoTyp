@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/textproto"
 	"os"
@@ -16,11 +17,12 @@ import (
 	"time"
 )
 
-// fakeServer 是受控的 JSON-RPC 对端：只回应 initialize，其余消息原样交给测试。
+// fakeServer 自动回应握手和主文件选择，其余消息交给测试。
 type fakeServer struct {
-	in  *bufio.Reader
-	out io.Writer
-	got chan message
+	in         *bufio.Reader
+	out        io.Writer
+	got        chan message
+	holdSource bool
 }
 
 func startFake(t *testing.T) (*Client, *fakeServer) {
@@ -30,17 +32,15 @@ func startFake(t *testing.T) (*Client, *fakeServer) {
 	f := &fakeServer{in: bufio.NewReader(serverR), out: serverW, got: make(chan message, 16)}
 	go f.serve()
 	cl := New(context.Background(), t.TempDir())
-	cl.launch = func(ctx context.Context, root, outDir string) (*conn, error) {
+	cl.launch = func(ctx context.Context, root string) (*conn, error) {
 		c := newConn(clientR, clientW)
-		return c, initialize(ctx, c, root, outDir)
+		c.stopProcess = func() { _ = serverW.Close() }
+		return c, initialize(ctx, c, root)
 	}
 	t.Cleanup(func() {
 		clientW.Close()
 		serverW.Close()
 		cl.cancel()
-		if cl.outDir != "" {
-			os.RemoveAll(cl.outDir)
-		}
 	})
 	return cl, f
 }
@@ -78,6 +78,10 @@ func (f *fakeServer) serve() {
 			f.reply(m.ID, "null")
 			continue
 		}
+		if m.Method == "textDocument/documentColor" && !f.holdSource {
+			f.reply(m.ID, `[]`)
+			continue
+		}
 		f.got <- m
 	}
 }
@@ -94,13 +98,19 @@ func (f *fakeServer) notify(method, params string) {
 
 func (f *fakeServer) next(t *testing.T, method string) message {
 	t.Helper()
-	for m := range f.got {
-		if m.Method == method {
-			return m
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case m := <-f.got:
+			if m.Method == method {
+				return m
+			}
+		case <-timer.C:
+			t.Fatalf("没有收到 %s", method)
+			return message{}
 		}
 	}
-	t.Fatalf("没有收到 %s", method)
-	return message{}
 }
 
 // 取消的请求要通知服务端，并且不能再返回结果。
@@ -129,6 +139,38 @@ func TestCompleteCancel(t *testing.T) {
 	}
 	// 迟到的响应没有人等待，不能阻塞读取循环。
 	f.reply(req.ID, `[{"label":"text"}]`)
+}
+
+// 首次源码读取被扣住时，较新请求可以取消，且不能提前发送 didChange。
+func TestCompleteWaitsForFirstSourceRead(t *testing.T) {
+	cl, f := startFake(t)
+	f.holdSource = true
+	doc := Document{Path: "/v/a.typ", Text: "first", Version: 1}
+	opened := make(chan error, 1)
+	go func() { opened <- cl.OpenContext(t.Context(), doc) }()
+	read := f.next(t, "textDocument/documentColor")
+	ctx, cancel := context.WithCancel(t.Context())
+	fresh := Document{Path: doc.Path, Text: "second", Version: 2}
+	finished := make(chan error, 1)
+	go func() { _, err := cl.Complete(ctx, fresh, 1); finished <- err }()
+	cancel()
+	select {
+	case err := <-finished:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("补全无法在首次源码读取期间取消")
+	}
+	select {
+	case m := <-f.got:
+		t.Fatalf("首次源码读取完成前发送了 %s", m.Method)
+	default:
+	}
+	f.reply(read.ID, `[]`)
+	if err := <-opened; err != nil {
+		t.Fatal(err)
+	}
 }
 
 // 版本变化时先发送全量文本，再发出请求，保证服务端按新文本计算。
@@ -162,91 +204,6 @@ func TestStaleRequestDoesNotRewindText(t *testing.T) {
 	case m := <-f.got:
 		t.Fatalf("旧请求发出了 %s", m.Method)
 	default:
-	}
-}
-
-// 等待自动 PDF 时取消必须结束旧连接，迟到的输出不能进入下一次同步。
-func TestPreviewCancelClosesConnection(t *testing.T) {
-	cl, f := startFake(t)
-	cl.OnPreview(func(Document, []byte, error) {})
-	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan error, 1)
-	go func() { done <- cl.OpenContext(ctx, Document{Path: "/v/a.typ", Text: "= A", Version: 1}) }()
-	f.next(t, "textDocument/didOpen")
-	cancel()
-	if err := <-done; err != context.Canceled {
-		t.Fatalf("err = %v，期望 context.Canceled", err)
-	}
-	if cl.conn != nil {
-		t.Fatal("取消后仍保留旧连接")
-	}
-}
-
-// 后一版源码必须等前一版 PDF 完成后才发送，输出的快照版本不能错配。
-func TestPreviewSerializesSnapshots(t *testing.T) {
-	cl, f := startFake(t)
-	got := make(chan Document, 2)
-	cl.OnPreview(func(doc Document, data []byte, err error) {
-		if err == nil && string(data) == doc.Text {
-			got <- doc
-		}
-	})
-	first := Document{Path: "/v/a.typ", Text: "first", Version: 1}
-	second := Document{Path: first.Path, Text: "second", Version: 2}
-	done := make(chan error, 2)
-	go func() { done <- cl.OpenContext(t.Context(), first) }()
-	output := previewOutput(t, f)
-	f.next(t, "textDocument/didOpen")
-	go func() { done <- cl.OpenContext(t.Context(), second) }()
-	if err := os.WriteFile(output, []byte(first.Text), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if doc := <-got; doc != first {
-		t.Fatalf("第一份快照 = %+v", doc)
-	}
-	output = previewOutput(t, f)
-	f.next(t, "textDocument/didChange")
-	if err := os.WriteFile(output, []byte(second.Text), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if doc := <-got; doc != second {
-		t.Fatalf("第二份快照 = %+v", doc)
-	}
-	for range 2 {
-		if err := <-done; err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
-func previewOutput(t *testing.T, f *fakeServer) string {
-	t.Helper()
-	m := f.next(t, "workspace/didChangeConfiguration")
-	var p struct {
-		Settings struct {
-			Output string `json:"outputPath"`
-		} `json:"settings"`
-	}
-	if err := json.Unmarshal(m.Params, &p); err != nil {
-		t.Fatal(err)
-	}
-	return p.Settings.Output + ".pdf"
-}
-
-// 编译错误应结束本次等待并允许后续编辑继续，不能等待不存在的 PDF 直到超时。
-func TestPreviewCompileErrorKeepsConnection(t *testing.T) {
-	cl, f := startFake(t)
-	got := make(chan error, 1)
-	cl.OnPreview(func(_ Document, _ []byte, err error) { got <- err })
-	done := make(chan error, 1)
-	go func() { done <- cl.OpenContext(t.Context(), Document{Path: "/v/a.typ", Text: "#(", Version: 1}) }()
-	f.next(t, "textDocument/didOpen")
-	f.notify("tinymist/compileStatus", `{"path":"/v/a.typ","status":"compileError"}`)
-	if err := <-got; err != ErrCompile {
-		t.Fatalf("编译结果 = %v", err)
-	}
-	if err := <-done; err != nil || cl.conn == nil {
-		t.Fatalf("编译失败破坏了连接：%v", err)
 	}
 }
 

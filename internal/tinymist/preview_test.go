@@ -4,218 +4,284 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
-	"slices"
+	"regexp"
 	"testing"
+	"time"
 )
 
-// 切换主文件时，内存更新可能晚于入口编译；磁盘产物不能冒充当前快照或进入复用缓存。
-func TestPreviewSwitchUsesMemoryResult(t *testing.T) {
-	cl, f := startFake(t)
-	results := make(chan string, 3)
-	cl.OnPreview(func(_ Document, data []byte, err error) {
-		if err == nil {
-			results <- string(data)
-		}
-	})
-	var firstConn *conn
-	for i := range 2 {
-		if i > 0 {
-			fresh, server := startFake(t)
-			server.got = f.got
-			cl.launch = fresh.launch
-		}
-		doc := Document{Path: "/v/a.typ", Text: "memory", Version: 1, Session: uint64(i + 1)}
-		done := make(chan error, 1)
-		go func() { done <- cl.OpenContext(t.Context(), doc) }()
-		output := previewOutput(t, f)
-		f.next(t, "textDocument/didOpen")
-		data := doc.Text
-		if i > 0 && cl.conn == firstConn {
-			// 旧进程会先导出磁盘版本，新进程没有尚未安装的上一会话内存事件。
-			data = "disk"
-		}
-		if err := os.WriteFile(output, []byte(data), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if err := <-done; err != nil {
-			t.Fatal(err)
-		}
-		if got := <-results; got != doc.Text {
-			t.Errorf("预览 = %q，期望内存快照 %q", got, doc.Text)
-		}
-		if i > 0 {
-			if cl.starts != 1 {
-				t.Fatalf("主动切换会话消耗了崩溃重启次数：%d", cl.starts)
-			}
-			// 旧关闭任务即使排在新会话的补全同步之后，也不能关闭同一路径的新文档。
-			cl.CloseDoc(doc.Path, doc.Session-1)
-			if value, ok := cl.docs.Load(doc.Path); !ok || value.(*docState).doc != doc {
-				t.Fatal("旧会话的关闭任务删除了新会话快照")
-			}
-			doc.Version++
-			if err := cl.OpenContext(t.Context(), doc); err != nil {
-				t.Fatal(err)
-			}
-			if got := <-results; got != doc.Text {
-				t.Errorf("复用缓存 = %q，期望内存快照 %q", got, doc.Text)
-			}
-		}
-		firstConn = cl.conn
-		cl.CloseDoc(doc.Path, doc.Session)
-	}
+type previewOutcome struct {
+	file *PreviewFile
+	err  error
 }
 
-// 外部变化只失效磁盘缓存，不把大文件正文复制进 JSON-RPC，也不因文件较大重启编译器。
-func TestRefreshInvalidatesWithoutCopyingFiles(t *testing.T) {
-	cl, f := startFake(t)
-	cl.OnPreview(func(Document, []byte, error) {})
-	doc := Document{Path: "/v/a.typ", Text: "= A", Version: 1}
-	done := make(chan error, 1)
-	go func() { done <- cl.OpenContext(t.Context(), doc) }()
-	output := previewOutput(t, f)
-	f.next(t, "textDocument/didOpen")
-	if err := os.WriteFile(output, []byte("first"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	name := filepath.Join(t.TempDir(), "large.bin")
-	file, err := os.Create(name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = file.Truncate(32 << 20)
-	file.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	go func() { done <- cl.Refresh(ctx, doc, []string{name, name}) }()
-	req := <-f.got
-	if req.Method != "tinymist/fsChange" {
-		cancel()
-		<-done
-		t.Fatalf("文件变化触发了 %s，期望缓存失效", req.Method)
-	}
-	var params struct {
-		Inserts []any    `json:"inserts"`
-		Removes []string `json:"removes"`
-	}
-	if err := json.Unmarshal(req.Params, &params); err != nil {
-		t.Fatal(err)
-	}
-	if len(params.Inserts) != 0 || !slices.Equal(params.Removes, []string{fileURI(name)}) {
-		t.Fatalf("文件失效请求包含正文或重复路径：%+v", params)
-	}
-	f.reply(req.ID, "null")
-	output = previewOutput(t, f)
-	f.next(t, "textDocument/didChange")
-	if err := os.WriteFile(output, []byte("refreshed"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-}
-
-// 输入后立即删除可能只改变 buffer 版本；相同源码必须复用上一份 PDF，而不是等到超时。
-func TestPreviewReusesUnchangedText(t *testing.T) {
-	for _, compileError := range []bool{false, true} {
-		t.Run(map[bool]string{false: "成功", true: "编译失败"}[compileError], func(t *testing.T) {
-			cl, f := startFake(t)
-			type result struct {
-				doc  Document
-				data string
-				err  error
-			}
-			results := make(chan result, 2)
-			cl.OnPreview(func(doc Document, data []byte, err error) { results <- result{doc, string(data), err} })
-			doc := Document{Path: "/v/a.typ", Text: "= A", Version: 1}
-			done := make(chan error, 1)
-			go func() { done <- cl.OpenContext(t.Context(), doc) }()
-			output := previewOutput(t, f)
-			f.next(t, "textDocument/didOpen")
-			if compileError {
-				f.notify("tinymist/compileStatus", `{"path":"/v/a.typ","status":"compileError"}`)
-			} else if err := os.WriteFile(output, []byte("pdf"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			first := <-results
-			if err := <-done; err != nil {
-				t.Fatal(err)
-			}
-			doc.Version = 3
-			go func() { done <- cl.OpenContext(t.Context(), doc) }()
-			select {
-			case next := <-results:
-				if next.doc != doc || next.data != first.data || next.err != first.err {
-					t.Errorf("未复用编译结果：%+v", next)
-				}
-			case m := <-f.got:
-				t.Errorf("相同源码重新等待输出：%s", m.Method)
-				cl.cancel()
-			}
-			if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
-				t.Fatal(err)
-			}
-		})
-	}
-}
-
-// 每次调用使用自己的取消信号，第一次打开文档的 context 不能覆盖后来的调用。
-func TestPreviewUsesCurrentCallContext(t *testing.T) {
-	cl, f := startFake(t)
-	cl.OnPreview(func(Document, []byte, error) {})
-	doc := Document{Path: "/v/a.typ", Text: "first", Version: 1}
-	done := make(chan error, 1)
-	go func() { done <- cl.OpenContext(t.Context(), doc) }()
-	output := previewOutput(t, f)
-	f.next(t, "textDocument/didOpen")
-	if err := os.WriteFile(output, []byte("pdf"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	doc.Version, doc.Text = 2, "second"
-	go func() { done <- cl.OpenContext(ctx, doc) }()
-	previewOutput(t, f)
-	f.next(t, "textDocument/didChange")
-	cancel()
-	if p := cl.pdfWait.Load(); p != nil && p.ctx.Err() == nil {
-		t.Error("本次调用取消后仍等待第一次打开文档时的 context")
-		cl.cancel()
-	}
-	if err := <-done; !errors.Is(err, context.Canceled) {
-		t.Fatalf("取消结果 = %v", err)
-	}
-}
-
-// 补全抢在打开队列之前同步时，也必须继承请求的取消，而不是客户端生命周期。
-func TestPreviewCompletionBeforeOpenCanCancel(t *testing.T) {
-	cl, f := startFake(t)
-	cl.OnPreview(func(Document, []byte, error) {})
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	done := make(chan error, 1)
+func previewAsync(cl *Client, ctx context.Context, doc Document) <-chan previewOutcome {
+	result := make(chan previewOutcome, 1)
 	go func() {
-		_, err := cl.Complete(ctx, Document{Path: "/v/a.typ", Text: "#te", Version: 1, Session: 1}, 3)
-		done <- err
+		file, err := cl.Preview(ctx, doc)
+		result <- previewOutcome{file, err}
 	}()
-	previewOutput(t, f)
-	f.next(t, "textDocument/didOpen")
-	cancel()
-	if p := cl.pdfWait.Load(); p != nil && p.ctx.Err() == nil {
-		t.Error("补全提前同步时未使用请求的 context")
-		cl.cancel()
+	return result
+}
+
+func takePreviewRequest(t *testing.T, f *fakeServer) (message, string) {
+	t.Helper()
+	var p struct {
+		Settings struct {
+			Output string `json:"outputPath"`
+		} `json:"settings"`
 	}
-	if err := <-done; !errors.Is(err, context.Canceled) {
-		t.Fatalf("取消结果 = %v", err)
+	if err := json.Unmarshal(f.next(t, "workspace/didChangeConfiguration").Params, &p); err != nil {
+		t.Fatal(err)
+	}
+	req := f.next(t, "workspace/executeCommand")
+	var command struct {
+		Name string `json:"command"`
+	}
+	if err := json.Unmarshal(req.Params, &command); err != nil || command.Name != "tinymist.exportPdf" || p.Settings.Output == "" {
+		t.Fatalf("导出请求无效：%s, %v", req.Params, err)
+	}
+	return req, p.Settings.Output + ".pdf"
+}
+
+func replyPreview(t *testing.T, f *fakeServer, req message, path, data string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result, err := json.Marshal(map[string]string{"path": path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.reply(req.ID, string(result))
+}
+
+func TestEditingRequestsAdvanceDuringPreview(t *testing.T) {
+	cl, f := startFake(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	first := Document{Path: "/v/a.typ", Text: "first", Version: 1, Session: 1}
+	pending := previewAsync(cl, ctx, first)
+	req, path := takePreviewRequest(t, f)
+	fresh := Document{Path: first.Path, Text: "second", Version: 2, Session: 1}
+	waiting := previewAsync(cl, ctx, fresh)
+	finished := make(chan error, 2)
+	go func() { _, err := cl.Complete(ctx, fresh, 1); finished <- err }()
+	f.next(t, "textDocument/didChange")
+	f.reply(f.next(t, "textDocument/completion").ID, `[]`)
+	go func() { _, _, err := cl.Hover(ctx, fresh, 1); finished <- err }()
+	f.reply(f.next(t, "textDocument/hover").ID, `null`)
+	for range 2 {
+		if err := <-finished; err != nil {
+			t.Fatal(err)
+		}
+	}
+	select {
+	case req := <-f.got:
+		t.Fatalf("上一份 PDF 还未完成，已发出 %s", req.Method)
+	default:
+	}
+	replyPreview(t, f, req, path, first.Text)
+	verifyPreviewFile(t, path, first.Text, <-pending)
+	nextReq, nextPath := takePreviewRequest(t, f)
+	if path == nextPath {
+		t.Fatal("两个快照共用了同一个文件")
+	}
+	replyPreview(t, f, nextReq, nextPath, fresh.Text)
+	verifyPreviewFile(t, nextPath, fresh.Text, <-waiting)
+}
+
+func verifyPreviewFile(t *testing.T, path, data string, result previewOutcome) {
+	t.Helper()
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	buf := make([]byte, result.file.Size)
+	_, err := result.file.File.ReadAt(buf, 0)
+	result.file.Close()
+	if err != nil || string(buf) != data {
+		t.Fatalf("预览内容 = %q, %v", buf, err)
+	}
+	if _, err := os.Stat(filepath.Dir(path)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("临时目录未清理：%v", err)
+	}
+}
+
+func TestRefreshReleasesInFlightPreview(t *testing.T) {
+	cl, f := startFake(t)
+	doc := Document{Path: "/v/a.typ", Text: "= A", Version: 1, Session: 1}
+	pending := previewAsync(cl, t.Context(), doc)
+	_, path := takePreviewRequest(t, f)
+	fresh, server := startFake(t)
+	cl.launch = fresh.launch
+	server.holdSource = true
+	refreshed := make(chan error, 1)
+	go func() { refreshed <- cl.Refresh(t.Context(), doc) }()
+	read := server.next(t, "textDocument/documentColor")
+	select {
+	case result := <-pending:
+		if !errors.Is(result.err, ErrDisconnected) {
+			t.Fatalf("旧预览结果 = %v", result.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("新进程等待首次读取时，旧预览未结束")
+	}
+	if _, err := os.Stat(filepath.Dir(path)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("旧预览目录未清理：%v", err)
+	}
+	server.reply(read.ID, `[]`)
+	if err := <-refreshed; err != nil || cl.starts != 1 {
+		t.Fatalf("刷新结果 = %v，启动次数 = %d", err, cl.starts)
+	}
+}
+
+func TestNewPreviewSessionReplacesConnection(t *testing.T) {
+	cl, f := startFake(t)
+	first := Document{Path: "/v/a.typ", Text: "first", Version: 1, Session: 1}
+	pending := previewAsync(cl, t.Context(), first)
+	req, path := takePreviewRequest(t, f)
+	replyPreview(t, f, req, path, first.Text)
+	verifyPreviewFile(t, path, first.Text, <-pending)
+	oldConn := cl.conn
+
+	fresh, server := startFake(t)
+	cl.launch = fresh.launch
+	second := Document{Path: first.Path, Text: "second", Version: 1, Session: 2}
+	pending = previewAsync(cl, t.Context(), second)
+	req, path = takePreviewRequest(t, server)
+	cl.CloseDoc(second.Path, first.Session)
+	replyPreview(t, server, req, path, second.Text)
+	verifyPreviewFile(t, path, second.Text, <-pending)
+	if cl.conn == oldConn || cl.starts != 1 {
+		t.Fatal("切换会话未隔离原进程，或消耗了崩溃重启次数")
+	}
+	if value, ok := cl.docs.Load(second.Path); !ok || value.(*docState).doc != second {
+		t.Fatal("旧会话的关闭任务删除了新会话快照")
+	}
+}
+
+func TestPreviewCancelCleansOutput(t *testing.T) {
+	cl, f := startFake(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	pending := previewAsync(cl, ctx, Document{Path: "/v/a.typ", Text: "= A", Version: 1})
+	_, path := takePreviewRequest(t, f)
+	cancel()
+	if result := <-pending; !errors.Is(result.err, context.Canceled) || cl.conn != nil {
+		t.Fatalf("取消结果 = %v，连接 = %v", result.err, cl.conn)
+	}
+	if _, err := os.Stat(filepath.Dir(path)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("取消后临时目录未清理：%v", err)
+	}
+}
+
+func TestPreviewFromEditor(t *testing.T) {
+	if _, err := exec.LookPath("tinymist"); err != nil {
+		t.Skip("未安装 tinymist")
+	}
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl := New(t.Context(), root)
+	defer cl.Close()
+	note := filepath.Join(root, "note.typ")
+	part := filepath.Join(root, "part.typ")
+	if err := os.WriteFile(note, []byte(`#invalid-disk-source()`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(part, []byte("#let delta = 0pt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	doc := Document{Path: note, Session: 1}
+	for version := range 5 {
+		doc.Text = fmt.Sprintf("#import \"part.typ\": delta\n#set page(width: %dpt + delta, height: 200pt)\nPreview", 110+version)
+		doc.Version = uint64(version)
+		if err := cl.OpenContext(t.Context(), doc); err != nil {
+			t.Fatal(err)
+		}
+	}
+	checkPreviewWidth(t, cl, doc, "114")
+	replacement := filepath.Join(root, "replacement.typ")
+	if err := os.WriteFile(replacement, []byte("#let delta = 3pt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, part); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.Refresh(t.Context(), doc); err != nil {
+		t.Fatal(err)
+	}
+	checkPreviewWidth(t, cl, doc, "117")
+	doc.Text = `#invalid-buffer()`
+	doc.Version++
+	if failed, err := cl.Preview(t.Context(), doc); !errors.Is(err, ErrCompile) {
+		if failed != nil {
+			failed.Close()
+		}
+		t.Fatalf("编译失败结果 = %v", err)
+	}
+	if after, err := os.ReadFile(note); err != nil || string(after) != `#invalid-disk-source()` {
+		t.Fatalf("预览改写了源文件：%s, %v", after, err)
+	}
+}
+
+func checkPreviewWidth(t *testing.T, cl *Client, doc Document, want string) {
+	t.Helper()
+	file, err := cl.Preview(t.Context(), doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	data, err := io.ReadAll(file.File)
+	if err != nil {
+		t.Fatal(err)
+	}
+	box := regexp.MustCompile(`/MediaBox\s*\[\s*0\s+0\s+(\d+)(?:\.0+)?\s+200(?:\.0+)?\s*\]`).FindSubmatch(data)
+	if len(box) != 2 || string(box[1]) != want {
+		t.Fatalf("PDF 页面尺寸 = %q，期望宽度 %s pt", box, want)
+	}
+}
+
+func TestPreviewUsesSafeOutputDirectory(t *testing.T) {
+	if _, err := exec.LookPath("tinymist"); err != nil {
+		t.Skip("未安装 tinymist")
+	}
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := t.TempDir()
+	for _, key := range []string{"HOME", "XDG_CACHE_HOME", "LOCALAPPDATA"} {
+		t.Setenv(key, cache)
+	}
+	temp := filepath.Join(root, "$root-$dir-$name")
+	if err := os.Mkdir(temp, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"TMPDIR", "TMP", "TEMP"} {
+		t.Setenv(key, temp)
+	}
+	cl := New(t.Context(), root)
+	defer cl.Close()
+	doc := Document{Path: filepath.Join(root, "note.typ"), Text: "= Preview", Session: 1}
+	file, err := cl.Preview(t.Context(), doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := file.File.Name()
+	file.Close()
+	if hasOutputVariables(output) {
+		t.Fatalf("预览路径仍含模板变量：%s", output)
+	}
+	if _, err := os.Stat(filepath.Dir(output)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("备用预览目录未清理：%v", err)
+	}
+	if files, err := os.ReadDir(root); err != nil || len(files) != 1 || files[0].Name() != filepath.Base(temp) {
+		t.Fatalf("模板展开在仓库中产生了文件：%v, %v", files, err)
 	}
 }

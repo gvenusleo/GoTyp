@@ -12,14 +12,13 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
 // ErrUnavailable 表示找不到 tinymist，或它反复崩溃后已停用。
 var ErrUnavailable = errors.New("tinymist 不可用")
 
-// errStale 表示请求的版本比已同步的旧。后台请求的先后不确定，旧请求不能把服务端的文本退回去。
+// errStale 表示请求版本比已同步版本旧。旧请求不能把服务端的文本退回去。
 var errStale = errors.New("文档版本已过期")
 
 const (
@@ -42,20 +41,23 @@ type docState struct {
 	conn       *conn
 	doc        Document
 	lspVersion int
-	pdf        []byte
-	pdfErr     error
+	source     *sourceRead
+}
+
+type sourceRead struct {
+	done chan struct{}
+	err  error
 }
 
 // Client 管理一个仓库的 tinymist 进程。进程在第一次使用时启动。
 type Client struct {
-	ctx     context.Context
-	cancel  context.CancelFunc
-	root    string
-	launch  func(ctx context.Context, root, outDir string) (*conn, error)
-	onDiag  func(session uint64, path string, doc *Document, diags []Diagnostic)
-	onShow  func(session uint64, path string, at Position)
-	onPDF   func(doc Document, data []byte, err error)
-	pdfWait atomic.Pointer[pdfWaiter]
+	ctx       context.Context
+	cancel    context.CancelFunc
+	root      string
+	launch    func(ctx context.Context, root string) (*conn, error)
+	onDiag    func(session uint64, path string, doc *Document, diags []Diagnostic)
+	onShow    func(session uint64, path string, at Position)
+	previewMu sync.Mutex
 
 	mu       sync.Mutex
 	conn     *conn
@@ -64,8 +66,6 @@ type Client struct {
 	session  uint64
 	// 诊断接收不能等待发送时持有的 mu，否则大文档可能堵住 stdio 管道的两端。
 	docs sync.Map // string -> *docState，只替换，不改动已存入的快照
-	// outDir 是 tinymist 导出文件的临时目录，第一次启动进程时创建，Close 时删除。
-	outDir string
 }
 
 // New 返回仓库 root 的客户端，不启动进程。ctx 结束时进程随之结束。
@@ -76,7 +76,7 @@ func New(ctx context.Context, root string) *Client {
 
 // launch 启动 tinymist 并完成初始化握手。tinymist 在标准输入关闭时退出，
 // 所以 GoTyp 崩溃时不会留下进程。
-func launch(ctx context.Context, root, outDir string) (*conn, error) {
+func launch(ctx context.Context, root string) (*conn, error) {
 	if _, err := exec.LookPath("tinymist"); err != nil {
 		return nil, ErrUnavailable
 	}
@@ -94,20 +94,28 @@ func launch(ctx context.Context, root, outDir string) (*conn, error) {
 		return nil, err
 	}
 	c := newConn(stdout, stdin)
+	exited := make(chan struct{})
+	c.stopProcess = func() {
+		_ = cmd.Process.Kill()
+		<-exited
+	}
 	go func() {
 		<-c.done
 		cmd.Wait()
+		close(exited)
 	}()
-	if err := initialize(ctx, c, root, outDir); err != nil {
-		stdin.Close()
+	if err := initialize(ctx, c, root); err != nil {
+		c.stop()
 		return nil, err
 	}
 	return c, nil
 }
 
-func initialize(ctx context.Context, c *conn, root, outDir string) error {
+func initialize(ctx context.Context, c *conn, root string) error {
 	ctx, cancel := context.WithTimeout(ctx, initTimeout)
 	defer cancel()
+	stop := context.AfterFunc(ctx, c.stop)
+	defer stop()
 	uri := fileURI(root)
 	params := map[string]any{
 		"processId":        os.Getpid(),
@@ -126,9 +134,9 @@ func initialize(ctx context.Context, c *conn, root, outDir string) error {
 		},
 		// 预览按快照设置独立输出路径。
 		"initializationOptions": map[string]any{
-			"exportPdf": "never", "outputPath": filepath.Join(outDir, "$name"),
-			"compileStatus":  "enable",
-			"semanticTokens": "disable", "formatterMode": "typstyle",
+			"exportPdf":         "never",
+			"projectResolution": "singleFile",
+			"semanticTokens":    "disable", "formatterMode": "typstyle",
 		},
 	}
 	if err := c.call(ctx, "initialize", params, nil); err != nil {
@@ -139,10 +147,17 @@ func initialize(ctx context.Context, c *conn, root, outDir string) error {
 
 // connect 返回可用的连接，必要时启动或重启进程。调用方持有 mu。
 func (cl *Client) connect() (*conn, error) {
-	if cl.conn != nil && !cl.conn.closed() {
-		return cl.conn, nil
+	if c := cl.conn; c != nil {
+		switch {
+		case c.stopping.Load():
+			c.stop()
+			cl.starts--
+		case !c.closed():
+			return c, nil
+		}
+		cl.conn = nil
+		cl.docs.Clear()
 	}
-	cl.conn = nil
 	if cl.disabled || cl.ctx.Err() != nil {
 		return nil, ErrUnavailable
 	}
@@ -150,15 +165,8 @@ func (cl *Client) connect() (*conn, error) {
 		cl.disabled = true
 		return nil, ErrUnavailable
 	}
-	if cl.outDir == "" {
-		dir, err := makeTemp("tinymist")
-		if err != nil {
-			return nil, err
-		}
-		cl.outDir = dir
-	}
 	cl.starts++
-	c, err := cl.launch(cl.ctx, cl.root, cl.outDir)
+	c, err := cl.launch(cl.ctx, cl.root)
 	if err != nil {
 		if errors.Is(err, ErrUnavailable) {
 			cl.disabled = true
@@ -171,6 +179,8 @@ func (cl *Client) connect() (*conn, error) {
 	cl.conn = c
 	// 先接管主文件选择，避免首次 didOpen 的隐式聚焦与显式聚焦触发两次编译。
 	if err := focus(c, nil); err != nil {
+		cl.conn = nil
+		c.stop()
 		return nil, err
 	}
 	return c, nil
@@ -204,7 +214,7 @@ func (cl *Client) syncCall(ctx context.Context, doc Document, method string, par
 		cl.mu.Unlock()
 		return err
 	}
-	c, err := cl.syncLocked(ctx, doc, false)
+	c, err := cl.syncLocked(ctx, doc)
 	if err != nil {
 		cl.mu.Unlock()
 		return err
@@ -221,109 +231,151 @@ func (cl *Client) syncCall(ctx context.Context, doc Document, method string, par
 	return c.wait(ctx, id, ch, out)
 }
 
-// Open 同步文档，必要时启动进程。打开笔记时和编辑停顿后调用，让诊断和预览跟上最新文本。
+// Open 同步文档，必要时启动进程。
 func (cl *Client) Open(doc Document) error {
 	return cl.OpenContext(cl.ctx, doc)
 }
 
-// OpenContext 同步快照，取消后不再等待其预览结果。
+// OpenContext 同步快照，让编辑辅助和诊断跟上最新文本。
 func (cl *Client) OpenContext(ctx context.Context, doc Document) error {
 	cl.mu.Lock()
 	defer cl.mu.Unlock()
-	_, err := cl.syncLocked(ctx, doc, false)
+	_, err := cl.syncLocked(ctx, doc)
 	return err
 }
 
-// syncLocked 串行提交快照及其 PDF；下一版文本不能越过尚未完成的预览。
-func (cl *Client) syncLocked(ctx context.Context, doc Document, force bool) (*conn, error) {
+// syncLocked 同步快照，并在等待首次源码读取时释放 mu。
+func (cl *Client) syncLocked(ctx context.Context, doc Document) (*conn, error) {
+	for {
+		c, err := cl.documentConnectionLocked(ctx, doc.Session)
+		if err != nil {
+			return nil, err
+		}
+		value, _ := cl.docs.Load(doc.Path)
+		st, _ := value.(*docState)
+		if st == nil || st.conn != c || st.doc.Session != doc.Session {
+			if err := cl.openDocumentLocked(c, doc); err != nil {
+				return nil, cl.disconnectLocked(c, err)
+			}
+			continue
+		}
+		if doc.Version < st.doc.Version {
+			return nil, errStale
+		}
+		if waited, err := cl.waitForSourceLocked(ctx, st.source); err != nil || waited {
+			if err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if st.source.err != nil {
+			return nil, cl.disconnectLocked(c, st.source.err)
+		}
+		return cl.updateDocumentLocked(c, doc, st)
+	}
+}
+
+func (cl *Client) documentConnectionLocked(ctx context.Context, session uint64) (*conn, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if doc.Session < cl.session {
+	if session < cl.session {
 		return nil, errStale
 	}
-	if doc.Session != cl.session && cl.conn != nil {
+	if session != cl.session && cl.conn != nil {
 		// didClose 的文件缓存失效没有完成回执；新会话必须隔离尚未安装的旧内存事件。
-		if !cl.conn.closed() {
-			shutdown(ctx, cl.conn)
+		if c := cl.conn; c.stopping.Load() || !c.closed() {
+			shutdown(ctx, c)
 			cl.starts--
 		}
 		cl.conn = nil
 		cl.docs.Clear()
 	}
-	cl.session = doc.Session
+	cl.session = session
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	c, err := cl.connect()
-	if err != nil {
-		return nil, err
+	return cl.connect()
+}
+
+func (cl *Client) waitForSourceLocked(ctx context.Context, source *sourceRead) (bool, error) {
+	select {
+	case <-source.done:
+		return false, nil
+	default:
 	}
-	value, _ := cl.docs.Load(doc.Path)
-	st, _ := value.(*docState)
-	opened := st != nil && st.conn == c && st.doc.Session == doc.Session
-	if opened && doc.Version < st.doc.Version {
-		return nil, errStale
+	cl.mu.Unlock()
+	select {
+	case <-source.done:
+	case <-ctx.Done():
 	}
-	if opened && doc.Version == st.doc.Version && !force {
+	cl.mu.Lock()
+	return true, ctx.Err()
+}
+
+func (cl *Client) updateDocumentLocked(c *conn, doc Document, st *docState) (*conn, error) {
+	if doc.Version == st.doc.Version {
 		return c, nil
 	}
-	if opened && st.doc.Text == doc.Text && !force {
-		// 撤销或删除刚输入的内容可能只改变 buffer 版本，tinymist 不会为相同文本再输出 PDF。
-		next := *st
-		next.doc = doc
+	next := *st
+	next.doc = doc
+	if st.doc.Text == doc.Text {
 		cl.docs.Store(doc.Path, &next)
-		if cl.onPDF != nil {
-			cl.onPDF(doc, st.pdf, st.pdfErr)
-		}
 		return c, nil
 	}
-	job, err := cl.beginPDF(ctx, c, doc, !opened || force)
-	if err != nil {
-		return nil, err
-	}
-	if job != nil {
-		defer func() {
-			cl.pdfWait.Store(nil)
-			job.close()
-		}()
-	}
-	if err = cl.sendDocument(c, doc, st, opened); err != nil {
-		cl.docs.Delete(doc.Path)
-		return nil, err
-	}
-	if force && opened {
-		if err := focus(c, doc.Path); err != nil {
-			return nil, err
-		}
-	}
-	if job != nil {
-		if err := cl.finishPDF(c, doc, job); err != nil {
-			return nil, err
-		}
+	next.lspVersion++
+	cl.docs.Store(doc.Path, &next)
+	if err := c.notify("textDocument/didChange", map[string]any{
+		"textDocument":   map[string]any{"uri": fileURI(doc.Path), "version": next.lspVersion},
+		"contentChanges": []any{map[string]any{"text": doc.Text}},
+	}); err != nil {
+		return nil, cl.disconnectLocked(c, err)
 	}
 	return c, nil
 }
 
-func (cl *Client) sendDocument(c *conn, doc Document, st *docState, opened bool) error {
-	version := 1
-	if opened {
-		version = st.lspVersion + 1
+func (cl *Client) disconnectLocked(c *conn, err error) error {
+	cl.conn = nil
+	cl.docs.Clear()
+	if c.stopping.Load() {
+		cl.starts--
 	}
-	cl.docs.Store(doc.Path, &docState{conn: c, doc: doc, lspVersion: version})
+	c.stop()
+	return errors.Join(ErrDisconnected, err)
+}
+
+func (cl *Client) openDocumentLocked(c *conn, doc Document) error {
+	source := &sourceRead{done: make(chan struct{})}
+	cl.docs.Store(doc.Path, &docState{conn: c, doc: doc, lspVersion: 1, source: source})
 	uri := fileURI(doc.Path)
-	if !opened {
-		if err := c.notify("textDocument/didOpen", map[string]any{"textDocument": map[string]any{
-			"uri": uri, "languageId": "typst", "version": version, "text": doc.Text,
-		}}); err != nil {
-			return err
-		}
-		return focus(c, doc.Path)
+	if err := c.notify("textDocument/didOpen", map[string]any{"textDocument": map[string]any{
+		"uri": uri, "languageId": "typst", "version": 1, "text": doc.Text,
+	}}); err != nil {
+		return err
 	}
-	return c.notify("textDocument/didChange", map[string]any{
-		"textDocument":   map[string]any{"uri": uri, "version": version},
-		"contentChanges": []any{map[string]any{"text": doc.Text}},
-	})
+	if err := focus(c, doc.Path); err != nil {
+		return err
+	}
+	// tinymist 0.15.12 首次读取源码后才登记缓存路径。提前发送 didChange
+	// 可能使 exportPdf 复用首版快照。documentColor 会读取编译器中的源码，空数组也是有效回执。
+	id, reply, err := c.send("textDocument/documentColor", map[string]any{"textDocument": map[string]string{"uri": uri}})
+	if err != nil {
+		return err
+	}
+	go cl.readSource(c, id, reply, source)
+	return nil
+}
+
+func (cl *Client) readSource(c *conn, id int64, reply chan *message, source *sourceRead) {
+	defer close(source.done)
+	ctx, cancel := context.WithTimeout(cl.ctx, initTimeout)
+	defer cancel()
+	defer c.drop(id)
+	var colors []json.RawMessage
+	source.err = c.receive(ctx, reply, &colors)
+	if source.err == nil && colors == nil {
+		source.err = errors.New("tinymist 未能首次读取主文件")
+	}
 }
 
 // focus 把主实例的主文件切到 path。tinymist 只在第一次 didOpen 时自动跟随，之后切换的笔记
@@ -362,15 +414,11 @@ func (cl *Client) CloseDoc(path string, session uint64) {
 // Close 按 LSP 约定结束进程，超时后强制结束。之后的请求都返回 ErrUnavailable。
 func (cl *Client) Close() {
 	cl.mu.Lock()
-	c, dir := cl.conn, cl.outDir
+	c := cl.conn
 	cl.conn = nil
 	cl.disabled = true
 	cl.mu.Unlock()
 	defer cl.cancel()
-	if dir != "" {
-		// 进程结束后才删，避免删除时它还在写导出文件。
-		defer os.RemoveAll(dir)
-	}
 	shutdown(cl.ctx, c)
 }
 
@@ -389,13 +437,19 @@ func (cl *Client) Suspend() {
 	shutdown(cl.ctx, c)
 }
 
-// shutdown 按 LSP 约定结束进程，超时后关闭标准输入，tinymist 随之退出。
+// shutdown 按 LSP 约定结束进程。超时后结束旧进程，即使此时尚有管道写入。
 func shutdown(ctx context.Context, c *conn) {
-	if c == nil || c.closed() {
+	if c == nil {
+		return
+	}
+	if c.closed() || c.stopping.Load() {
+		c.stop()
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, shutdownTimeout)
 	defer cancel()
+	stop := context.AfterFunc(ctx, c.stop)
+	defer stop()
 	if c.call(ctx, "shutdown", nil, nil) == nil {
 		c.notify("exit", nil)
 	}
@@ -403,6 +457,7 @@ func shutdown(ctx context.Context, c *conn) {
 	select {
 	case <-c.done:
 	case <-ctx.Done():
+		c.stop()
 	}
 }
 

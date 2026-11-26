@@ -30,8 +30,6 @@ func (cl *Client) OnShowDocument(fn func(session uint64, path string, at Positio
 
 func (cl *Client) notification(c *conn, session uint64, method string, params json.RawMessage) {
 	switch method {
-	case "tinymist/compileStatus":
-		cl.compileStatus(c, params)
 	case "textDocument/publishDiagnostics":
 		cl.diagnostics(c, session, params)
 	case "window/showDocument":

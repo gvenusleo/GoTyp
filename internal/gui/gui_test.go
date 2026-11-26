@@ -71,19 +71,25 @@ func TestPreviewDropsStaleSnapshots(t *testing.T) {
 	s.lspPath, s.lspID, s.previewStarting = "/v/note.typ", 1, true
 	a.current = s
 	doc := s.lspDocument()
+	revision := s.previewRevision()
 	s.ed.Buffer.Set("= Changed")
-	if a.receivePDF(a.lsp, doc, nil, tinymist.ErrCompile) || !s.previewStarting || s.previewErr != "" {
+	if a.receivePDF(a.lsp, doc, revision, nil, tinymist.ErrCompile) || !s.previewStarting || s.previewErr != "" {
 		t.Fatal("旧版本改动了当前预览状态")
 	}
-	doc = s.lspDocument()
+	doc, revision = s.lspDocument(), s.previewRevision()
+	s.previewDependencies++
+	if a.receivePDF(a.lsp, doc, revision, nil, tinymist.ErrCompile) || !s.previewStarting || s.previewErr != "" {
+		t.Fatal("依赖已变化，仍接受旧编译结果")
+	}
+	revision = s.previewRevision()
 	s.lspID++
-	if a.receivePDF(a.lsp, doc, nil, tinymist.ErrCompile) || !s.previewStarting || s.previewErr != "" {
+	if a.receivePDF(a.lsp, doc, revision, nil, tinymist.ErrCompile) || !s.previewStarting || s.previewErr != "" {
 		t.Fatal("切回同一个标签后接受了早先激活的预览")
 	}
 	pending, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	s.previewCancel, s.previewReady = cancel, true
-	a.receivePDF(a.lsp, s.lspDocument(), nil, tinymist.ErrCompile)
+	a.receivePDF(a.lsp, s.lspDocument(), s.previewRevision(), nil, tinymist.ErrCompile)
 	if pending.Err() == nil || !s.previewReady || s.previewErr == "" {
 		t.Fatal("当前编译失败后应取消待显示的 PDF 并保留已有画面")
 	}
@@ -379,7 +385,7 @@ func TestDiagnosticsBeforeDebouncedSync(t *testing.T) {
 	s := newSession("a.typ", "#foo\n", vault.FileStat{})
 	s.lspPath = "/v/a.typ"
 	a.current = s
-	s.syncedVersion = s.ed.Buffer.Version()
+	s.syncedVersion = new(s.ed.Buffer.Version())
 	s.ed.Buffer.Edit(editor.Edit{Text: "\n"})
 	doc := s.lspDocument()
 	diags := []tinymist.Diagnostic{{Start: tinymist.Position{Line: 1, Character: 1}, End: tinymist.Position{Line: 1, Character: 4}, Error: true, Message: "unknown variable: foo"}}
