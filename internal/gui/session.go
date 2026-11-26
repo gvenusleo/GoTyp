@@ -52,18 +52,21 @@ type session struct {
 	mdScroll      ui.ScrollState
 
 	// Typst 预览快照的状态，见 typstpreview.go。
-	syncedVersion   uint64
-	diagSnapshot    *tinymist.Document
-	syncing         bool
-	previewReady    bool
-	previewStarting bool
-	previewCancel   context.CancelFunc
-	previewVersion  uint64
-	previewErr      string
-	previewMissing  bool
-	previewErrOpen  bool
-	previewFiles    []string
-	formatting      bool
+	syncedVersion       *uint64
+	diagSnapshot        *tinymist.Document
+	syncing             bool
+	previewing          bool
+	previewReady        bool
+	previewStarting     bool
+	previewCancel       context.CancelFunc
+	previewDependencies uint64
+	previewRequested    *previewRevision
+	previewResult       *previewResult
+	previewErr          string
+	previewMissing      bool
+	previewErrOpen      bool
+	syncedDependencies  uint64
+	formatting          bool
 
 	statsCache   textStats
 	statsVersion uint64

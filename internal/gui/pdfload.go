@@ -4,6 +4,8 @@ import (
 	"context"
 
 	"github.com/gvenusleo/mygo-pdf/pdf"
+
+	"gotyp/internal/tinymist"
 )
 
 func (a *App) loadPreview(ctx context.Context, data []byte, finished func(pdf.State)) {
@@ -11,6 +13,17 @@ func (a *App) loadPreview(ctx context.Context, data []byte, finished func(pdf.St
 	if request := a.preview.LoadBytes(ctx, data, pdf.RefreshDocument); request != 0 {
 		a.previewRequest, a.previewLoaded = request, finished
 	}
+}
+
+func (a *App) loadPreviewFile(ctx context.Context, file *tinymist.PreviewFile, finished func(pdf.State)) {
+	request, released := a.preview.LoadReaderAt(ctx, file.File, file.Size, pdf.LoadOptions{Mode: pdf.RefreshDocument})
+	if request != 0 {
+		a.previewRequest, a.previewLoaded = request, finished
+	}
+	a.previewFiles.Go(func() {
+		<-released
+		file.Close()
+	})
 }
 
 func (a *App) pdfStateChanged(state pdf.State) {

@@ -10,6 +10,7 @@ import (
 	"net/textproto"
 	"strconv"
 	"sync"
+	"sync/atomic"
 )
 
 // errClosed 表示连接已经断开，可能是进程退出，也可能是主动关闭。
@@ -41,7 +42,20 @@ type conn struct {
 	pending map[int64]chan *message
 	onNote  func(method string, params json.RawMessage)
 
-	done chan struct{}
+	done        chan struct{}
+	stopProcess func()
+	stopping    atomic.Bool
+	stopOnce    sync.Once
+}
+
+// stop 等进程结束，确保取消的导出不会在清理之后重新创建文件。
+func (c *conn) stop() {
+	c.stopOnce.Do(func() {
+		if c.stopProcess != nil {
+			c.stopProcess()
+		}
+		c.w.Close()
+	})
 }
 
 // handleNotes 设置服务端通知的接收者，在读取循环中调用。设置之前到达的通知被丢弃。
@@ -121,6 +135,15 @@ func (c *conn) drop(id int64) {
 
 // wait 等待响应。ctx 先结束时通知服务端取消，并放弃这次结果。
 func (c *conn) wait(ctx context.Context, id int64, ch chan *message, out any) error {
+	err := c.receive(ctx, ch, out)
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		c.drop(id)
+		c.notify("$/cancelRequest", map[string]any{"id": id})
+	}
+	return err
+}
+
+func (c *conn) receive(ctx context.Context, ch chan *message, out any) error {
 	select {
 	case m := <-ch:
 		if m.Error != nil {
@@ -133,8 +156,6 @@ func (c *conn) wait(ctx context.Context, id int64, ch chan *message, out any) er
 	case <-c.done:
 		return errClosed
 	case <-ctx.Done():
-		c.drop(id)
-		c.notify("$/cancelRequest", map[string]any{"id": id})
 		return ctx.Err()
 	}
 }

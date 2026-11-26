@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/egoist/mygo"
 	_ "github.com/egoist/mygo/locales/zh-Hans"
@@ -23,7 +24,7 @@ const (
 
 var modeNames = []string{"edit", "split", "preview"}
 
-// App 的全部字段都只在主线程读写，后台任务通过 Window.Update 应用结果。
+// App 的界面状态只在主线程读写，后台任务通过 Window.Update 应用结果。
 type App struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -52,6 +53,7 @@ type App struct {
 	preview        *pdf.Viewer
 	previewLoaded  func(pdf.State)
 	previewRequest uint64
+	previewFiles   sync.WaitGroup
 	lspSeq         uint64
 	// pendingJump 是打开另一篇笔记后要移动到的位置，见 typstedit.go。
 	pendingJump  *noteJump
@@ -154,10 +156,12 @@ func Run() error {
 		}
 	})
 	err := mygo.App.Run()
+	a.cancel()
 	if a.preview != nil {
 		a.preview.Close()
 		<-a.preview.Done()
 	}
+	a.previewFiles.Wait()
 	return err
 }
 

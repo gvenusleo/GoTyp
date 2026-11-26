@@ -46,11 +46,6 @@ func (a *App) startLSP(root string) {
 			}
 		})
 	})
-	if a.preview != nil {
-		client.OnPreview(func(doc tinymist.Document, data []byte, err error) {
-			a.publish(func() { a.receivePDF(client, doc, data, err) })
-		})
-	}
 	a.lsp = client
 	a.lspQueue = &serialQueue{}
 }
@@ -148,8 +143,8 @@ func (a *App) detachLSP(s *session) {
 		return
 	}
 	s.cancelLSP()
-	s.syncing, s.formatting = false, false
-	s.previewFiles = nil
+	s.syncing, s.formatting, s.previewing = false, false, false
+	s.syncedVersion = nil
 	s.ed.ShowCompletions(-1, nil)
 	s.ed.OnCompletion, s.ed.OnHover, s.ed.OnDefinition, s.ed.ContextMenu = nil, nil, nil, nil
 	s.ed.SetDiagnostics(s.ed.Buffer.Version(), nil)
