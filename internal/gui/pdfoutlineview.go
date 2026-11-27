@@ -126,35 +126,33 @@ func pdfOutlineTitleRow(c *ui.Context, row ui.OutlineRow, item pdfOutlineRow, cu
 	case line.Hovered():
 		text, background = t.Text, rowFill(t).Over(t.Background)
 	}
+	depth := row.Depth
+	inset := t.Space(2)
 	var titleRow ui.Element
-	line.Children(func() {
-		ui.Row(c).Width(t.Space(2)).Shrink(0).AlignItems(ui.Center).Children(func() {
+	line.PaddingX(inset).Radius(t.Radius).Background(background).Children(func() {
+		for level := range depth {
+			x := inset + float32(level)*pdfOutlineIndent + (pdfOutlineArrowSize-pdfOutlineGuideWidth)/2
+			ui.Box(c).Absolute().Left(x).Top(0).Bottom(0).Width(pdfOutlineGuideWidth).
+				Background(pdfOutlineGuideColor(t)).PassThrough()
+		}
+		ui.Box(c).Width(float32(depth) * pdfOutlineIndent).Shrink(0)
+		pdfOutlineArrow(c, row)
+		titleRow = ui.Row(c).Grow(1).MinWidth(0).AlignSelf(ui.Stretch).AlignItems(ui.Center).Tooltip(title)
+		if item.entry.Page > 0 {
+			titleRow.Cursor(ui.CursorPointer)
+		}
+		titleRow.Children(func() {
+			label := ui.Text(c, title).FontSize(textSize).TextColor(text).SingleLine().Ellipsis("…").Grow(1).MinWidth(0)
 			if current {
-				ui.Box(c).Size(pdfOutlineMarkerWidth, pdfOutlineMarkerHeight).
-					Radius(pdfOutlineMarkerWidth / 2).Background(t.Text)
+				label.Current(ui.CurrentLocation)
 			}
-		})
-		ui.Row(c).Grow(1).MinWidth(0).Height(pdfOutlineRowHeight-2).AlignItems(ui.Center).
-			Radius(t.Radius).Padding(0, t.Space(2), 0, float32(min(row.Depth, 4))*pdfOutlineIndent).
-			Background(background).Children(func() {
-			pdfOutlineArrow(c, row)
-			titleRow = ui.Row(c).Grow(1).MinWidth(0).AlignSelf(ui.Stretch).AlignItems(ui.Center).Tooltip(title)
-			if item.entry.Page > 0 {
-				titleRow.Cursor(ui.CursorPointer)
-			}
-			titleRow.Children(func() {
-				label := ui.Text(c, title).FontSize(textSize).TextColor(text).SingleLine().Ellipsis("…").Grow(1).MinWidth(0)
-				if current {
-					label.FontWeight(600).Current(ui.CurrentLocation)
-				}
-			})
 		})
 	})
 	return item.entry.Page > 0 && titleRow.RowClicked()
 }
 
 func pdfOutlineArrow(c *ui.Context, row ui.OutlineRow) {
-	arrow := row.Arrow().Size(pdfOutlineArrowSize, pdfOutlineRowHeight-2).Center()
+	arrow := row.Arrow().Size(pdfOutlineArrowSize, pdfOutlineRowHeight).Shrink(0).Center()
 	if !row.Branch {
 		return
 	}

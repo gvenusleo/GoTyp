@@ -8,6 +8,8 @@ import (
 	"github.com/gvenusleo/mygo-pdf/pdf"
 )
 
+const pdfOutlineMaxLevel = 6
+
 type pdfOutlineState struct {
 	tree                     ui.OutlineState[int]
 	roots                    []int
@@ -110,7 +112,7 @@ func (p *pdfOutlineState) setResult(result pdf.OutlineResult) {
 	previous, oldIndexes, oldRows := p.keys, p.indexes, p.rows
 	p.keys, p.indexes = make(map[pdfOutlineKey]int), make(map[int]int)
 	p.rows = nil
-	p.roots = p.indexEntries(result.Entries, -1, 0, previous)
+	p.roots = p.indexEntries(result.Entries, -1, 0, 1, previous)
 	for _, row := range p.rows {
 		oldIndex, existed := oldIndexes[row.id]
 		if len(row.children) == 0 {
@@ -128,11 +130,14 @@ func (p *pdfOutlineState) setResult(result pdf.OutlineResult) {
 	p.updateCurrentRow()
 }
 
-func (p *pdfOutlineState) indexEntries(entries []pdf.OutlineEntry, parent, parentID int, previous map[pdfOutlineKey]int) []int {
+func (p *pdfOutlineState) indexEntries(entries []pdf.OutlineEntry, parent, parentID, level int, previous map[pdfOutlineKey]int) []int {
 	if len(entries) == 0 {
 		return nil
 	}
-	rows := make([]int, 0, len(entries))
+	var rows []int
+	if level <= pdfOutlineMaxLevel {
+		rows = make([]int, 0, len(entries))
+	}
 	keys := make([]pdfOutlineKey, len(entries))
 	counts := make(map[pdfOutlineKey]int)
 	for i, entry := range entries {
@@ -163,10 +168,13 @@ func (p *pdfOutlineState) indexEntries(entries []pdf.OutlineEntry, parent, paren
 		index := len(p.rows)
 		p.rows = append(p.rows, pdfOutlineRow{entry: entry, id: id, parent: parent})
 		p.indexes[id] = index
-		children := p.indexEntries(entry.Children, index, id, previous)
+		// 更深的书签仍参与阅读位置匹配，界面只接收可显示的子项。
+		children := p.indexEntries(entry.Children, index, id, level+1, previous)
 		p.rows[index].children = children
 		p.rows[index].end = len(p.rows)
-		rows = append(rows, id)
+		if level <= pdfOutlineMaxLevel {
+			rows = append(rows, id)
+		}
 	}
 	return rows
 }
@@ -196,15 +204,15 @@ func (p *pdfOutlineState) visibleCurrentRow() int {
 	return current
 }
 
-// visibleRowIndex 跳过折叠分支的后代，换算为 Outline 的可见行号。
+// visibleRowIndex 跳过折叠或超出显示层级的后代，换算为 Outline 的可见行号。
 func (p *pdfOutlineState) visibleRowIndex(index int) int {
 	visible := 0
 	for i := 0; i < index; visible++ {
 		row := p.rows[i]
-		if len(row.children) > 0 && !p.tree.Open.Has(row.id) {
-			i = row.end
-		} else {
+		if p.tree.Open.Has(row.id) {
 			i++
+		} else {
+			i = row.end
 		}
 	}
 	return visible
