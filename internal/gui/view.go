@@ -137,9 +137,9 @@ func (a *App) contentView(c *ui.Context) {
 			a.alertView(c, s)
 			// 非笔记的纯文本没有预览，不论模式都只显示编辑器。
 			switch {
-			case a.mode == modeEdit || s.kind == 0:
+			case s.kind == 0 || a.activeTab.layout.mode == modeEdit:
 				a.editorView(c, s)
-			case a.mode == modePreview:
+			case a.activeTab.layout.mode == modePreview:
 				a.previewView(c, s)
 			default:
 				a.splitView(c, s)
@@ -162,15 +162,12 @@ func (a *App) contentWidth(c *ui.Context) float32 {
 }
 
 func (a *App) splitView(c *ui.Context, s *session) {
-	width := a.contentWidth(c)
-	if width < splitMinWidth {
-		ui.SplitVerticalPercent(c, &a.editorPercent,
-			func() { a.editorView(c, s) },
-			func() { a.previewView(c, s) },
-		).SplitReset(50).Grow(1).OnChange(a.persistWorkspace)
-		return
+	tab := a.activeTab
+	split := ui.SplitPercent
+	if a.contentWidth(c) < splitMinWidth {
+		split = ui.SplitVerticalPercent
 	}
-	ui.SplitPercent(c, &a.editorPercent,
+	split(c.Key("split-"+tab.id), &tab.layout.editorPercent,
 		func() { a.editorView(c, s) },
 		func() { a.previewView(c, s) },
 	).SplitReset(50).Grow(1).OnChange(a.persistWorkspace)

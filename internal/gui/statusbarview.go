@@ -29,7 +29,7 @@ func (a *App) statusBarView(c *ui.Context, s *session) {
 			a.compileStatus(c, s)
 		}
 		ui.Spacer(c)
-		if width >= statusPositionWidth && (s.kind == 0 || a.mode != modePreview) {
+		if width >= statusPositionWidth && (s.kind == 0 || a.activeTab.layout.mode != modePreview) {
 			a.positionStatus(c, s)
 		}
 		if width >= statusStatsWidth {
@@ -48,7 +48,7 @@ func (a *App) compileStatus(c *ui.Context, s *session) {
 	case previewUnavailable(s):
 		statusItem(c, s.previewErr, iconAlert, "tinymist 不可用", t.TextMuted, nil, false)
 		return
-	case s.previewStarting && a.mode != modeEdit:
+	case s.previewStarting && a.activeTab.layout.mode != modeEdit:
 		statusItem(c, "正在启动 Typst 预览", nil, "启动预览", t.TextMuted, nil, true)
 		return
 	}

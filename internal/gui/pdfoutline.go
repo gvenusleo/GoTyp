@@ -17,6 +17,7 @@ type pdfOutlineState struct {
 	displayed, load, request uint64
 	page, currentRow         int
 	jumpedID                 int // 手动跳转的书签身份，零表示只有页码可用。
+	lastHeading              int // 上次显示时用于定位的书签身份。
 	cancel                   context.CancelFunc
 	result                   pdf.OutlineResult
 	rows                     []pdfOutlineRow
@@ -47,8 +48,8 @@ func (p *pdfOutlineState) cancelRead() {
 	p.cancel, p.request = nil, 0
 }
 
-func (a *App) updatePDFOutline(state pdf.State) {
-	p := &a.pdfOutline
+func (preview *pdfPreview) updateOutline(ctx context.Context, state pdf.State) {
+	p := &preview.outline
 	if p.load != state.RequestGeneration {
 		// 新的 PDF 加载会取消组件中尚未完成的大纲请求。
 		p.cancelRead()
@@ -61,20 +62,20 @@ func (a *App) updatePDFOutline(state pdf.State) {
 			p.updateCurrentRow()
 		}
 	}
-	a.readPDFOutline(state)
+	preview.readOutline(ctx, state)
 }
 
-func (a *App) readPDFOutline(state pdf.State) {
-	p := &a.pdfOutline
-	if a.preview == nil || state.Loading || state.DisplayedGeneration == 0 || p.request != 0 ||
+func (preview *pdfPreview) readOutline(ctx context.Context, state pdf.State) {
+	p := &preview.outline
+	if preview.Viewer == nil || state.Loading || state.DisplayedGeneration == 0 || p.request != 0 ||
 		p.result.DisplayedGeneration == state.DisplayedGeneration {
 		return
 	}
-	ctx, cancel := context.WithCancel(a.ctx)
-	tab, generation := a.activeTab, state.DisplayedGeneration
-	request := a.preview.ReadOutline(ctx, func(result pdf.OutlineResult) {
-		if ctx.Err() != nil || a.activeTab != tab || p.request != result.RequestGeneration ||
-			generation != result.DisplayedGeneration || generation != a.preview.State().DisplayedGeneration {
+	ctx, cancel := context.WithCancel(ctx)
+	generation := state.DisplayedGeneration
+	request := preview.ReadOutline(ctx, func(result pdf.OutlineResult) {
+		if ctx.Err() != nil || p.request != result.RequestGeneration ||
+			generation != result.DisplayedGeneration || generation != preview.State().DisplayedGeneration {
 			return
 		}
 		p.cancelRead()
@@ -209,13 +210,16 @@ func (p *pdfOutlineState) visibleRowIndex(index int) int {
 	return visible
 }
 
-func (a *App) jumpPDFOutline(index int) {
-	p := &a.pdfOutline
+func (a *App) jumpPDFOutline(preview *pdfPreview, index int) {
+	if a.activePDF() != preview {
+		return
+	}
+	p := &preview.outline
 	entry := p.rows[index].entry
 	if entry.Page == 0 {
 		return
 	}
-	if !a.preview.GoToOutline(entry) {
+	if !preview.GoToOutline(entry) {
 		a.notify("无法跳到 PDF 书签")
 		return
 	}

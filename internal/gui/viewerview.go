@@ -30,12 +30,13 @@ func (a *App) viewerView(c *ui.Context, vw *viewer) {
 func (a *App) pdfFileView(c *ui.Context, vw *viewer) {
 	t := c.Theme()
 	ui.Column(c.Key(vw.id)).Grow(1).MinWidth(0).MinHeight(0).Background(t.Surface).Children(func() {
-		if a.preview != nil {
-			a.preview.View(c.Key("pdf-file"), a.contentWidth(c))
+		preview := a.activePDF()
+		if preview != nil {
+			preview.View(c.Key("pdf-file"), a.contentWidth(c))
 		}
 		if !vw.pdfReady {
 			ui.Column(c.Key("pdf-status")).Absolute().Fill().Center().Children(func() {
-				if vw.note != "" || a.preview == nil {
+				if vw.note != "" || preview == nil {
 					a.viewerFallback(c, vw)
 				} else {
 					ui.Spinner(c).Label("正在打开 PDF")

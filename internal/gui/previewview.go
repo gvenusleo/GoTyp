@@ -33,13 +33,13 @@ func (a *App) typstPreviewView(c *ui.Context, s *session) {
 	ui.Column(c).Grow(1).MinWidth(0).Background(t.Surface).Label("Typst 预览").Children(func() {
 		a.diagnosticsView(c, s)
 		ui.Column(c.Key(s.id)).Grow(1).MinWidth(0).MinHeight(0).Children(func() {
-			if a.preview != nil {
+			if preview := a.activePDF(); preview != nil {
 				layout := struct {
 					mode                      int
 					width, split              float32
 					focus, diagnostics, alert bool
-				}{a.mode, a.contentWidth(c), a.editorPercent, a.focus, s.previewErrOpen && a.diagReport.text != "", s.conflict || s.err != ""}
-				a.preview.View(c.Key("pdf"), layout)
+				}{a.activeTab.layout.mode, a.contentWidth(c), a.activeTab.layout.editorPercent, a.focus, s.previewErrOpen && a.diagReport.text != "", s.conflict || s.err != ""}
+				preview.View(c.Key("pdf"), layout)
 			}
 			if !s.previewReady {
 				a.typstEmptyView(c, s)

@@ -74,14 +74,12 @@ func (a *App) filesChanged(v *vault.Vault, events []mygo.FileEvent) {
 			tab.changed = true
 			tab.viewer.cancelPDF()
 		}
-	}
-	if s := a.current; s != nil && s.lspPath != "" {
-		for _, event := range events {
-			if event.Path != s.id || (event.OldPath != "" && event.OldPath != s.id) {
-				s.previewDependencies++
-				a.previewChanged(s)
-				break
-			}
+		s := tab.session
+		if s != nil && s.kind == vault.KindTypst && slices.ContainsFunc(events, func(event mygo.FileEvent) bool {
+			return event.Op == mygo.FileHint || event.Path != s.id || (event.OldPath != "" && event.OldPath != s.id)
+		}) {
+			s.previewDependencies++
+			a.previewChanged(s)
 		}
 	}
 	a.checkTabs()
@@ -242,7 +240,8 @@ func (a *App) checkTab(tab *fileTab) {
 				return
 			}
 			tab.checking, tab.pdfRead = false, nil
-			if a.busy || tab.changed || read.changed(id, next) || (s != nil && (s.saving || s.stat != expected)) {
+			if a.busy || tab.changed || read.changed(id, next) || (vw != nil && isPDF(id) && tab != a.activeTab) ||
+				(s != nil && (s.saving || s.stat != expected)) {
 				tab.changed = true
 				return
 			}

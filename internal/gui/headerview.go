@@ -38,13 +38,14 @@ func (a *App) headerView(c *ui.Context, s *session) {
 // modeSwitch 是编辑、分屏、预览三个图标分段。
 func (a *App) modeSwitch(c *ui.Context) {
 	t := c.Theme()
-	seg := ui.SegmentedBase(c, &a.mode, len(modeIcons))
+	mode := &a.activeTab.layout.mode
+	seg := ui.SegmentedBase(c.Key("mode-"+a.activeTab.id), mode, len(modeIcons))
 	seg.Track.Padding(modeTrackInset).Radius(t.Radius + 1).Background(t.Surface).Label("显示模式").Children(func() {
 		for i, svg := range modeIcons {
 			part := seg.Segment(i).Padding(t.Space(1), t.Space(2)).Radius(t.Radius - 1).Label(modeLabels[i]).Tooltip(modeLabels[i])
 			color := t.TextMuted
 			part.Transition(hoverMotion)
-			if i == a.mode {
+			if i == *mode {
 				part.Background(raisedFill(t)).Shadow(0, modeShadowY, modeShadowBlur, 0, modeShadowColor)
 				color = t.Text
 			} else if part.Hovered() {

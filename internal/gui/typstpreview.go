@@ -48,7 +48,8 @@ func (a *App) schedulePreview(s *session) {
 		a.syncLSP(s)
 		return
 	}
-	if a.preview == nil || s.previewing || (s.previewRequested != nil && *s.previewRequested == revision) {
+	p := a.activePDF()
+	if p == nil || p.restoring || s.previewing || (s.previewRequested != nil && *s.previewRequested == revision) {
 		return
 	}
 	s.previewRequested = new(revision)
@@ -144,7 +145,8 @@ func (a *App) receivePDF(client *tinymist.Client, doc tinymist.Document, revisio
 		a.previewFailed(s, doc, revision, err)
 		return false
 	}
-	if a.preview == nil {
+	p := a.activePDF()
+	if p == nil {
 		return false
 	}
 	if s.previewCancel != nil {
@@ -152,7 +154,7 @@ func (a *App) receivePDF(client *tinymist.Client, doc tinymist.Document, revisio
 	}
 	ctx, cancel := context.WithCancel(s.lspContext)
 	s.previewCancel = cancel
-	a.loadPreviewFile(ctx, file, func(state pdf.State) {
+	a.loadPreviewFile(p, ctx, file, func(state pdf.State) {
 		a.finishPDF(s, client, doc, revision, ctx, state.Err)
 	})
 	return true
@@ -200,7 +202,7 @@ func (a *App) finishPDF(s *session, client *tinymist.Client, doc tinymist.Docume
 	s.previewResult = &previewResult{text: doc.Text, dependencies: revision.dependencies}
 }
 
-func (a *App) stopPreview(s *session) {
+func (s *session) stopPreview() {
 	if s == nil {
 		return
 	}
@@ -208,14 +210,12 @@ func (a *App) stopPreview(s *session) {
 		s.previewCancel()
 		s.previewCancel = nil
 	}
-	s.previewReady, s.previewStarting = false, false
-	s.previewRequested, s.previewResult = nil, nil
-	if a.preview != nil {
-		a.clearPreview()
-	}
+	s.previewStarting, s.previewRequested = false, nil
 }
 
 func (s *session) resetPreview() {
+	s.stopPreview()
+	s.previewReady, s.previewResult = false, nil
 	s.previewErr, s.previewMissing, s.previewErrOpen = "", false, false
 }
 

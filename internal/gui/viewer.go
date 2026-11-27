@@ -68,16 +68,17 @@ func readPDF(v *vault.Vault, id string) (*viewer, error) {
 	return vw, nil
 }
 
-func (a *App) loadPDF(vw *viewer) {
-	if a.preview == nil || vw.note != "" {
+func (a *App) loadPDF(tab *fileTab) {
+	vw := tab.viewer
+	if vw.pdf == nil || vw.note != "" {
 		return
 	}
 	data := vw.pdf
 	vw.pdf = nil
 	ctx, cancel := context.WithCancel(a.ctx)
 	vw.pdfCancel = cancel
-	a.loadPreview(ctx, data, func(state pdf.State) {
-		if ctx.Err() != nil || a.viewing != vw {
+	tab.pdf.loadBytes(ctx, data, func(state pdf.State) {
+		if ctx.Err() != nil || tab.viewer != vw {
 			return
 		}
 		vw.cancelPDF()

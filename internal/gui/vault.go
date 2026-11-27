@@ -62,11 +62,8 @@ func (a *App) startOpenVault(root string) {
 
 // useVault 切换到已扫描好的仓库，并恢复它上次的界面状态和笔记。
 func (a *App) useVault(v *vault.Vault, tree *vault.Tree) {
-	a.stopPreview(a.current)
-	a.viewing.cancelPDF()
-	if a.preview != nil && a.viewing != nil && isPDF(a.viewing.id) {
-		a.clearPreview()
-	}
+	a.current.stopPreview()
+	a.closePDFPreviews()
 	a.detachLSP(a.current)
 	a.startLSP(v.Root())
 	a.vault, a.tree, a.current, a.viewing = v, tree, nil, nil
@@ -95,17 +92,18 @@ func (a *App) applyWorkspace(w vault.Workspace) {
 	if w.SidebarWidth > 0 {
 		a.sidebarWidth = clampSidebar(w.SidebarWidth, 0)
 	}
+	a.lastNoteLayout = noteLayout{mode: modeSplit, editorPercent: 50}
 	if w.EditorPercent > 0 {
-		a.editorPercent = w.EditorPercent
+		a.lastNoteLayout.editorPercent = w.EditorPercent
+	}
+	for i, name := range modeNames {
+		if w.Mode == name {
+			a.lastNoteLayout.mode = i
+			break
+		}
 	}
 	a.lineNumbers = !w.HideLineNumbers
 	a.sidebarHidden = w.SidebarHidden
-	a.mode = modeSplit
-	for i, name := range modeNames {
-		if w.Mode == name {
-			a.mode = i
-		}
-	}
 }
 
 func (a *App) openSelected() {
@@ -173,14 +171,17 @@ func (a *App) loadSession(id string) {
 }
 
 func (a *App) persistWorkspace() {
+	if a.current != nil && a.current.kind != 0 {
+		a.lastNoteLayout = a.activeTab.layout
+	}
 	if a.vault == nil {
 		return
 	}
 	w := vault.Workspace{
 		Tabs:         make([]string, 0, len(a.tabs)),
 		Selected:     a.openID(),
-		Mode:         modeNames[a.mode],
-		SidebarWidth: a.sidebarWidth, EditorPercent: a.editorPercent,
+		Mode:         modeNames[a.lastNoteLayout.mode],
+		SidebarWidth: a.sidebarWidth, EditorPercent: a.lastNoteLayout.editorPercent,
 		HideLineNumbers: !a.lineNumbers, SidebarHidden: a.sidebarHidden,
 	}
 	for _, tab := range a.tabs {

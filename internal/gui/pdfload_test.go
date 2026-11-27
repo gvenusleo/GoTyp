@@ -13,42 +13,74 @@ import (
 )
 
 func TestPDFStateChangedCompletesOnlyCurrentRequest(t *testing.T) {
-	a := newApp()
-	t.Cleanup(a.cancel)
 	var completed []pdf.State
-	a.previewRequest = 3
-	a.previewLoaded = func(state pdf.State) { completed = append(completed, state) }
-	a.pdfStateChanged(pdf.State{RequestGeneration: 2, DisplayedGeneration: 2})
-	a.pdfStateChanged(pdf.State{RequestGeneration: 3, Loading: true})
+	p := pdfPreview{request: 3, loaded: func(state pdf.State) { completed = append(completed, state) }}
+	p.stateChanged(t.Context(), pdf.State{RequestGeneration: 2, DisplayedGeneration: 2})
+	p.stateChanged(t.Context(), pdf.State{RequestGeneration: 3, Loading: true})
 	if len(completed) != 0 {
 		t.Fatal("过期或未完成的任务进入完成回调")
 	}
 	state := pdf.State{RequestGeneration: 3, DisplayedGeneration: 3, PageCount: 2}
-	a.pdfStateChanged(state)
-	a.pdfStateChanged(state)
-	if len(completed) != 1 || completed[0] != state || a.previewLoaded != nil {
+	p.stateChanged(t.Context(), state)
+	p.stateChanged(t.Context(), state)
+	if len(completed) != 1 || completed[0] != state || p.loaded != nil {
 		t.Fatalf("完成回调状态不符：%+v", completed)
 	}
 }
 
 func TestPDFRefreshRetiresPendingOutlineRead(t *testing.T) {
-	a := newApp()
-	t.Cleanup(a.cancel)
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
-	a.pdfOutline = pdfOutlineState{
+	p := pdfPreview{outline: pdfOutlineState{
 		displayed: 1, load: 1, request: 2, cancel: cancel,
 		result: pdf.OutlineResult{DisplayedGeneration: 1},
-	}
+	}}
 	// 原图仍在显示时，新加载会取消组件中的大纲读取。
-	a.pdfStateChanged(pdf.State{RequestGeneration: 2, DisplayedGeneration: 1, Loading: true})
-	if ctx.Err() == nil || a.pdfOutline.request != 0 {
+	p.stateChanged(t.Context(), pdf.State{RequestGeneration: 2, DisplayedGeneration: 1, Loading: true})
+	if ctx.Err() == nil || p.outline.request != 0 {
 		t.Fatal("刷新后仍在等待已取消的大纲请求")
 	}
 	// 刷新失败时旧 PDF 留在屏幕上，仍可使用同一代大纲。
-	a.pdfStateChanged(pdf.State{RequestGeneration: 2, DisplayedGeneration: 1, Err: errors.New("刷新失败")})
-	if a.pdfOutline.displayed != 1 || a.pdfOutline.result.DisplayedGeneration != 1 {
+	p.stateChanged(t.Context(), pdf.State{RequestGeneration: 2, DisplayedGeneration: 1, Err: errors.New("刷新失败")})
+	if p.outline.displayed != 1 || p.outline.result.DisplayedGeneration != 1 {
 		t.Fatal("刷新失败后丢失了正在显示的大纲")
+	}
+}
+
+func TestPDFEvictionReleasesPendingTypstArtifact(t *testing.T) {
+	a := newApp()
+	t.Cleanup(a.cancel)
+	makeArtifact := func() *typstPDF {
+		t.Helper()
+		name := filepath.Join(t.TempDir(), "preview.pdf")
+		if err := os.WriteFile(name, []byte("PDF"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return &typstPDF{path: name}
+	}
+	displayed, pending := makeArtifact(), makeArtifact()
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	p := &pdfPreview{
+		file: displayed, pendingFile: pending, request: 3,
+		loaded:  func(pdf.State) { t.Fatal("仍有过期加载回调") },
+		outline: pdfOutlineState{request: 2, cancel: cancel},
+	}
+	a.releasePDFViewer(p)
+	a.previewFiles.Wait()
+	if ctx.Err() == nil || p.pendingFile != nil || p.request != 0 || p.loaded != nil {
+		t.Fatal("回收查看器后未作废仍在等待的任务")
+	}
+	if _, err := os.Stat(pending.path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("回收查看器后待显示的 PDF 仍然存在：%v", err)
+	}
+	if _, err := os.Stat(displayed.path); err != nil {
+		t.Fatalf("回收查看器后无法复用已显示的 PDF：%v", err)
+	}
+	a.closeTabPDF(&fileTab{pdf: p})
+	a.previewFiles.Wait()
+	if _, err := os.Stat(displayed.path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("关闭标签后仍保留已显示的 PDF：%v", err)
 	}
 }
 
