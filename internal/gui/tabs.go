@@ -8,13 +8,20 @@ import (
 	"gotyp/internal/vault"
 )
 
+type noteLayout struct {
+	mode          int
+	editorPercent float32
+}
+
 type fileTab struct {
 	id       string
+	layout   noteLayout
 	session  *session
 	viewer   *viewer
 	changed  bool
 	checking bool
 	pdfRead  *pdfRead
+	pdf      *pdfPreview
 }
 
 func (tab *fileTab) loaded() bool {
@@ -41,7 +48,7 @@ func (a *App) tabFor(id string) *fileTab {
 	if tab := a.findTab(id); tab != nil {
 		return tab
 	}
-	tab := &fileTab{id: id}
+	tab := &fileTab{id: id, layout: a.lastNoteLayout}
 	a.tabs = append(a.tabs, tab)
 	return tab
 }
@@ -110,30 +117,22 @@ func (a *App) activateTab(tab *fileTab) {
 		next, viewing = tab.session, tab.viewer
 	}
 	if a.current != next {
-		a.stopPreview(a.current)
+		a.current.stopPreview()
 		a.detachLSP(a.current)
 	}
-	previous := a.activeTab
-	previousView := a.viewing
-	if viewing != previousView {
+	previous, previousView := a.activeTab, a.viewing
+	if previous == tab && viewing != previousView {
 		previousView.cancelPDF()
-	}
-	loadPDF := viewing != nil && isPDF(viewing.id) && viewing != previousView
-	if a.preview != nil && previousView != nil && isPDF(previousView.id) && viewing != previousView {
-		if loadPDF && previous == tab && previousView.id == viewing.id {
+		if previousView != nil && viewing != nil && previousView.id == viewing.id {
 			viewing.pdfReady = previousView.pdfReady
-		} else {
-			a.clearPreview()
 		}
 	}
-	if previous != nil && previous != tab && previous.viewer != nil {
-		// 只读文件下次激活时重读，及时释放可能很大的图片。
+	if previous != nil && previous != tab && previous.viewer != nil && !isPDF(previous.id) {
+		// 图片及其他只读文件下次激活时重读。
 		previous.viewer, previous.checking, previous.pdfRead = nil, false, nil
 	}
 	a.activeTab, a.current, a.viewing = tab, next, viewing
-	if loadPDF {
-		a.loadPDF(viewing)
-	}
+	a.activatePDF(tab)
 	a.tabIndex = max(0, slices.Index(a.tabs, tab))
 	a.revealTab = tab != nil && previous != tab
 	if next != nil {
@@ -234,7 +233,13 @@ func (a *App) removeTabs(match func(*fileTab) bool) {
 			next++
 		}
 	}
-	a.tabs = slices.DeleteFunc(a.tabs, match)
+	a.tabs = slices.DeleteFunc(a.tabs, func(tab *fileTab) bool {
+		if !match(tab) {
+			return false
+		}
+		a.closeTabPDF(tab)
+		return true
+	})
 	if active == nil || !match(active) {
 		a.tabIndex = max(0, slices.Index(a.tabs, active))
 		a.persistWorkspace()

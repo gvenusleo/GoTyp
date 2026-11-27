@@ -22,12 +22,12 @@ func (a *App) outlineSidebarView(c *ui.Context) {
 }
 
 func (a *App) pdfOutlineView(c *ui.Context, focusColor ui.Color) {
-	p := &a.pdfOutline
-	if s := a.current; s != nil && s.kind == vault.KindTypst && a.mode == modeEdit {
+	preview := a.activePDF()
+	if s := a.current; s != nil && s.kind == vault.KindTypst && a.activeTab.layout.mode == modeEdit {
 		outlineStatus(c, "切换到分屏或预览以查看大纲")
 		return
 	}
-	if p.displayed == 0 {
+	if preview == nil || preview.outline.displayed == 0 {
 		if a.viewing != nil && isPDF(a.viewing.id) && a.viewing.note == "" ||
 			a.current != nil && a.current.kind == vault.KindTypst && a.current.previewStarting {
 			ui.Spinner(c).Label("正在读取大纲").Margin(pdfOutlineLabelInset(c.Theme()))
@@ -36,6 +36,7 @@ func (a *App) pdfOutlineView(c *ui.Context, focusColor ui.Color) {
 		}
 		return
 	}
+	p := &preview.outline
 	if p.result.DisplayedGeneration != p.displayed {
 		ui.Spinner(c).Label("正在读取大纲").Margin(pdfOutlineLabelInset(c.Theme()))
 		return
@@ -51,7 +52,7 @@ func (a *App) pdfOutlineView(c *ui.Context, focusColor ui.Color) {
 	if p.result.Err != nil || p.result.Truncated {
 		outlineStatus(c, "大纲未完整显示")
 	}
-	a.pdfOutlineList(c, focusColor)
+	a.pdfOutlineList(c, preview, focusColor)
 }
 
 func outlineStatus(c *ui.Context, text string) {
@@ -60,8 +61,9 @@ func outlineStatus(c *ui.Context, text string) {
 		PaddingX(pdfOutlineLabelInset(t)).Shrink(0)
 }
 
-func (a *App) pdfOutlineList(c *ui.Context, focusColor ui.Color) {
-	p := &a.pdfOutline
+func (a *App) pdfOutlineList(c *ui.Context, preview *pdfPreview, focusColor ui.Color) {
+	p := &preview.outline
+	key := a.activeTab.id
 	tree := &p.tree
 	tree.List.Selected, tree.List.Label = &p.selection, p.rowLabel
 	var prefix ui.OutlineRow
@@ -72,10 +74,8 @@ func (a *App) pdfOutlineList(c *ui.Context, focusColor ui.Color) {
 	if current >= 0 {
 		id = p.rows[current].id
 	}
-	position := ui.Box(c.Key("outline-position")).Absolute().Size(0, 0).PassThrough()
-	previous := ui.Local(position, "current-heading", func() int { return -2 })
-	if *previous != id {
-		*previous = id
+	if p.lastHeading != id {
+		p.lastHeading = id
 		if current >= 0 {
 			row := p.visibleRowIndex(current)
 			if !tree.List.Handle.FocusWithin(c) {
@@ -85,7 +85,7 @@ func (a *App) pdfOutlineList(c *ui.Context, focusColor ui.Color) {
 		}
 	}
 	clicked := -1
-	ui.Outline(c.Key("pdf-outline-tree"), tree, p.roots, p.children, func(id int) {
+	ui.Outline(c.Key("pdf-outline-tree"+key), tree, p.roots, p.children, func(id int) {
 		index := p.indexes[id]
 		selected := p.selection >= 0 && p.selection < tree.Rows() && tree.Item(p.selection) == id
 		if pdfOutlineTitleRow(c, prefix, p.rows[index], current == index, selected && tree.List.FocusWithin(c)) {
@@ -93,11 +93,11 @@ func (a *App) pdfOutlineList(c *ui.Context, focusColor ui.Color) {
 		}
 	}).Grow(1).MinHeight(0).MinWidth(0).Label("章节").FocusRingColor(focusColor).OnSubmit(func() {
 		if index := p.selection; index >= 0 && index < tree.Rows() {
-			a.jumpPDFOutline(p.indexes[tree.Item(index)])
+			a.jumpPDFOutline(preview, p.indexes[tree.Item(index)])
 		}
 	})
 	if clicked >= 0 {
-		a.jumpPDFOutline(clicked)
+		a.jumpPDFOutline(preview, clicked)
 		c.AnimationFrame()
 	}
 }

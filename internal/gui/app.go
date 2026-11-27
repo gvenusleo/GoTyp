@@ -10,7 +10,6 @@ import (
 	"github.com/egoist/mygo"
 	_ "github.com/egoist/mygo/locales/zh-Hans"
 	"github.com/egoist/mygo/ui"
-	"github.com/gvenusleo/mygo-pdf/pdf"
 
 	"gotyp/internal/tinymist"
 	"gotyp/internal/vault"
@@ -47,15 +46,11 @@ type App struct {
 	// lspIdleGen 在打开或离开 Typst 笔记时递增，让已经安排的空闲结束失效。
 	lspIdleGen uint64
 	// diags 是 tinymist 报告的诊断，按文件绝对路径存放，切换笔记时清空；diagReport 是排好的文本和计数。
-	diags      map[string][]tinymist.Diagnostic
-	diagReport diagReport
-	// preview 随窗口创建，切换笔记只替换 PDF 文档。
-	preview        *pdf.Viewer
-	previewLoaded  func(pdf.State)
-	previewRequest uint64
-	previewFiles   sync.WaitGroup
-	pdfOutline     pdfOutlineState
-	lspSeq         uint64
+	diags        map[string][]tinymist.Diagnostic
+	diagReport   diagReport
+	previewFiles sync.WaitGroup
+	pdfUse       uint64
+	lspSeq       uint64
 	// pendingJump 是打开另一篇笔记后要移动到的位置，见 typstedit.go。
 	pendingJump  *noteJump
 	symbolRename symbolRenameState
@@ -75,9 +70,8 @@ type App struct {
 	outlinePreferredWidth float32
 	outlineSidebar        bool
 	outlineResizing       bool
-	editorPercent         float32
+	lastNoteLayout        noteLayout
 	sidebarHidden         bool
-	mode                  int
 	lineNumbers           bool
 	tabs                  []*fileTab
 	activeTab             *fileTab
@@ -114,7 +108,7 @@ func newApp() *App {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &App{
 		ctx: ctx, cancel: cancel, sidebarWidth: sidebarDefault, sidebarShown: 1, outlinePreferredWidth: pdfOutlineWidth,
-		editorPercent: 50, mode: modeSplit, lineNumbers: true, selectedRow: -1,
+		lastNoteLayout: noteLayout{mode: modeSplit, editorPercent: 50}, lineNumbers: true, selectedRow: -1,
 	}
 }
 
@@ -144,32 +138,18 @@ func Run() error {
 		})
 		a.win.OnClose(a.beforeClose)
 		a.win.OnClosed(func() {
-			a.stopPreview(a.current)
-			a.viewing.cancelPDF()
 			a.cancel()
+			a.current.stopPreview()
+			a.closePDFPreviews()
 			a.stopLSP()
 		})
-		a.preview = pdf.NewViewer(a.win, pdf.Options{
-			Labels:          pdf.ChineseLabels(),
-			OnLink:          func(address string) { a.services.OpenURL(address) },
-			CanOpenExternal: func() bool { return a.viewing != nil && isPDF(a.viewing.id) },
-			OpenExternal: func() {
-				if a.viewing != nil && isPDF(a.viewing.id) {
-					a.openVaultFile(a.viewing.id)
-				}
-			},
-		})
-		a.preview.OnChange(a.pdfStateChanged)
 		if len(a.state.Recent) > 0 {
 			a.startOpenVault(a.state.Recent[0])
 		}
 	})
 	err := mygo.App.Run()
 	a.cancel()
-	if a.preview != nil {
-		a.preview.Close()
-		<-a.preview.Done()
-	}
+	a.closePDFPreviews()
 	a.previewFiles.Wait()
 	return err
 }
@@ -181,6 +161,14 @@ func (a *App) setMenu() {
 	chooseMode := func(mode int) func(*mygo.MenuItem, *mygo.Window) {
 		return func(*mygo.MenuItem, *mygo.Window) { a.setMode(mode) }
 	}
+	mode := -1
+	if a.current != nil {
+		mode = modeEdit
+		if a.current.kind != 0 {
+			mode = a.activeTab.layout.mode
+		}
+	}
+	canChangeMode := a.current != nil && a.current.kind != 0
 	mygo.App.SetMenu(mygo.NewMenu([]*mygo.MenuItem{
 		{Role: mygo.RoleAppMenu, Submenu: []*mygo.MenuItem{
 			{Role: mygo.RoleAbout},
@@ -213,9 +201,9 @@ func (a *App) setMenu() {
 		}},
 		a.editMenu(action),
 		{Label: "视图", Submenu: []*mygo.MenuItem{
-			{Label: "编辑", Type: mygo.MenuItemRadio, Accelerator: "CmdOrCtrl+1", Checked: a.mode == modeEdit, Click: chooseMode(modeEdit)},
-			{Label: "分屏", Type: mygo.MenuItemRadio, Accelerator: "CmdOrCtrl+2", Checked: a.mode == modeSplit, Click: chooseMode(modeSplit)},
-			{Label: "预览", Type: mygo.MenuItemRadio, Accelerator: "CmdOrCtrl+3", Checked: a.mode == modePreview, Click: chooseMode(modePreview)},
+			{Label: "编辑", Type: mygo.MenuItemRadio, Accelerator: "CmdOrCtrl+1", Checked: mode == modeEdit, Disabled: !canChangeMode, Click: chooseMode(modeEdit)},
+			{Label: "分屏", Type: mygo.MenuItemRadio, Accelerator: "CmdOrCtrl+2", Checked: mode == modeSplit, Disabled: !canChangeMode, Click: chooseMode(modeSplit)},
+			{Label: "预览", Type: mygo.MenuItemRadio, Accelerator: "CmdOrCtrl+3", Checked: mode == modePreview, Disabled: !canChangeMode, Click: chooseMode(modePreview)},
 			mygo.Separator(),
 			{Label: "显示侧栏", Type: mygo.MenuItemCheckbox, Accelerator: "CmdOrCtrl+B", Checked: !a.sidebarHidden, Click: action(a.toggleSidebar)},
 			{Label: "显示行号", Type: mygo.MenuItemCheckbox, Checked: a.lineNumbers, Click: action(a.toggleLineNumbers)},
@@ -264,10 +252,10 @@ func (a *App) refreshMenu() {
 }
 
 func (a *App) setMode(mode int) {
-	if a.mode == mode {
+	if a.current == nil || a.current.kind == 0 || a.activeTab.layout.mode == mode {
 		return
 	}
-	a.mode = mode
+	a.activeTab.layout.mode = mode
 	a.modeChanged()
 }
 

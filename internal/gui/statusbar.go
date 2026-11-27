@@ -118,7 +118,7 @@ func (a *App) statusDiagnostics() {
 	if s == nil {
 		return
 	}
-	if a.mode == modeEdit {
+	if a.activeTab.layout.mode == modeEdit {
 		a.setMode(modeSplit)
 		s.previewErrOpen = true
 		return
