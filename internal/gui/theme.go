@@ -37,8 +37,7 @@ const (
 	pdfOutlineRowHeight      = 28
 	pdfOutlineArrowSize      = 16
 	pdfOutlineIndent         = 12
-	pdfOutlineMarkerWidth    = 2
-	pdfOutlineMarkerHeight   = 14
+	pdfOutlineGuideWidth     = 1
 	emptyInset               = 24
 	alertMessageWidth        = 168
 	diagnosticsHeight        = 180
@@ -200,7 +199,9 @@ func sidebarTheme(t ui.Theme) *ui.Theme {
 
 func pdfOutlineLabelInset(t *ui.Theme) float32 { return t.Space(2) + pdfOutlineArrowSize }
 
-// 大纲用内层圆角和短标记区分当前章节，列表本身继续处理键盘选中。
+func pdfOutlineGuideColor(t *ui.Theme) ui.Color { return t.Text.Alpha(0.16) }
+
+// 大纲自行高亮整行，列表本身继续处理键盘选中。
 func outlineTheme(t ui.Theme) *ui.Theme {
 	t.Accent = t.Background
 	t.InactiveAccent = t.Background
